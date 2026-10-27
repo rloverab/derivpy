@@ -13,7 +13,7 @@ Tres superficies según la documentación oficial (https://developers.deriv.com/
 
 Obtener credenciales
 --------------------
-1. Crea una aplicación en https://app.deriv.com/account/api-token → obtén un
+1. Crea una aplicación en https://home.deriv.com/dashboard/profile/api-tokens → obtén un
    ``App ID`` y un ``Personal Access Token`` con los escopos necesarios
    (``trade`` para operar). El PAT es la vía más simple para un bot personal.
 2. Alternativa OAuth2 (Authorization Code + PKCE) en :mod:`derivpy.auth`.

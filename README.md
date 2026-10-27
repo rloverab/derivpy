@@ -9,7 +9,7 @@ Librería ligera y legible en **Python ≥ 3.12** para interactuar con la API de
 ## Instalación
 
 ```bash
-git clone <url-de-tu-repositorio>/derivpy.git
+git clone https://github.com/rloverab/derivpy.git
 cd derivpy
 pip install -e .
 ```
@@ -18,7 +18,7 @@ Requiere Python 3.12 o superior.
 
 ## Credenciales
 
-1. Entra en [app.deriv.com → Token de API](https://app.deriv.com/account/api-token).
+1. Entra en [home.deriv.com → Token de API](https://home.deriv.com/dashboard/profile/api-tokens).
 2. Crea una aplicación: anota el **App ID**.
 3. Genera un **Personal Access Token (PAT)** con los escopos necesarios (`read` para datos/cuentas, `trade` para operar).
 4. Expórtalos como variables de entorno (nunca los escribas en el código):

@@ -14,6 +14,7 @@ keywords = ["deriv", "trading", "bot", "websocket", "asyncio"]
 dependencies = [
     # Única dependencia externa: cliente WebSocket.
     "websockets>=12.0",
+    "python-dotenv>=1.2.4"
 ]
 
 classifiers = [

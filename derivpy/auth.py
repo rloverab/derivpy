@@ -55,7 +55,7 @@ def build_authorize_url(
     """Construye la URL de login OAuth2 con PKCE.
 
     Args:
-        client_id: App ID creado en https://app.deriv.com/account/api-token.
+        client_id: App ID creado en https://home.deriv.com/dashboard/profile/api-tokens.
         redirect_uri: URI registrada de la aplicación.
         scopes: subconjunto de ``payment``, ``trade``, ``account_manage``,
             ``application_read``. Pide **todos** los que necesites: un token no

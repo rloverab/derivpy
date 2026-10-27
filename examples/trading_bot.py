@@ -3,7 +3,7 @@
 
 Necesitas un Personal Access Token (PAT) con scope ``trade`` y tu App ID:
 
-* Créalos en https://app.deriv.com/account/api-token
+* Créalos en https://home.deriv.com/dashboard/profile/api-tokens
 * Expórtalos como variables de entorno::
 
     export DERIV_TOKEN="tu-pat"
@@ -27,7 +27,11 @@ import asyncio
 import logging
 import os
 
+from dotenv import load_dotenv
+
 from derivpy import RestClient, TradingClient
+
+load_dotenv()
 
 
 async def main() -> None:
