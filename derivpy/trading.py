@@ -78,6 +78,10 @@ class TradingClient:
         self._recv_task: asyncio.Task[None] | None = None
         self._ping_task: asyncio.Task[None] | None = None
         self._req_counter = 0
+        #: Primer ``req_id`` visto en un mensaje entrante. Deriv lo "adopta" y lo
+        #: reenvía en los mensajes de stream posteriores; al reservarlo evitamos
+        #: que colisione con nuestras peticiones futuras.
+        self._req_id_floor: int | None = None
         # req_id -> Future que resuelve la PRIMERA respuesta con ese id.
         self._pending: dict[int, asyncio.Future[dict[str, Any]]] = {}
         # msg_type -> handlers de streams (ticks, balance, poc…)
@@ -142,6 +146,9 @@ class TradingClient:
     # ------------------------------------------------------------------ #
     def _next_req_id(self) -> int:
         self._req_counter += 1
+        if self._req_id_floor is not None and self._req_counter == self._req_id_floor:
+            # Reservado por el servidor (ver `_req_id_floor`).
+            self._req_counter += 1
         return self._req_counter
 
     async def send(self, payload: dict[str, Any]) -> None:
@@ -244,6 +251,11 @@ class TradingClient:
         """Reparte un mensaje: futures pendientes primero, luego streams."""
         req_id = msg.get("req_id")
         if req_id is not None:
+            if self._req_id_floor is None:
+                # El gateway Deriv "adopta" el primer req_id que ve y lo reenvía
+                # en todos los mensajes de stream; lo reservamos para no
+                # colisionar con peticiones propias futuras.
+                self._req_id_floor = int(req_id)
             fut = self._pending.get(req_id)
             if fut is not None and not fut.done():
                 fut.set_result(msg)

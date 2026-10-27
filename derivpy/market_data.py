@@ -53,6 +53,8 @@ class MarketDataClient:
         self._ws: websockets.ClientConnection | None = None
         self._recv_task: asyncio.Task[None] | None = None
         self._req_counter = 0
+        #: Primer ``req_id`` "adoptado" por el gateway (ver ``_stream``).
+        self._req_id_floor: int | None = None
         self._pending: dict[int, asyncio.Future[dict[str, Any]]] = {}
         # id(queue) -> (msg_types aceptados, cola) para los generadores de stream
         self._streams: dict[int, tuple[set[str], asyncio.Queue]] = {}
@@ -109,6 +111,9 @@ class MarketDataClient:
         if self._ws is None:
             raise DerivConnectionError("Llama a connect() antes de hacer peticiones.")
         self._req_counter += 1
+        if self._req_id_floor is not None and self._req_counter == self._req_id_floor:
+            # Reservado por el gateway (ver `_stream`).
+            self._req_counter += 1
         req_id = self._req_counter
         fut: asyncio.Future[dict[str, Any]] = asyncio.get_running_loop().create_future()
         self._pending[req_id] = fut
@@ -135,9 +140,20 @@ class MarketDataClient:
         msg_type = next(iter(payload))
         loop_msg_types = {msg_type, _response_type(msg_type)}
 
-        initial = await self.request({**payload, "subscribe": 1})
-        self._sub_ids[id(queue)] = initial.get("subscription", {}).get("id")
-        self._streams[id(queue)] = (loop_msg_types, queue)
+        # El gateway Deriv "adopta" el req_id de la primera petición que recibe
+        # y lo reenvía en todos los mensajes de stream posteriores; por eso:
+        #   1) registramos la cola ANTES de suscribirnos (la respuesta inicial
+        #      es también el primer mensaje del stream), y
+        #   2) marcamos ese req_id como reservado (`_req_id_floor`) para que
+        #      nunca colisione con peticiones futuras.
+        token = id(queue)
+        self._streams[token] = (loop_msg_types, queue)
+        try:
+            initial = await self.request({**payload, "subscribe": 1})
+        except BaseException:
+            self._streams.pop(token, None)
+            raise
+        self._sub_ids[token] = initial.get("subscription", {}).get("id")
         yield initial
         try:
             while True:
@@ -146,8 +162,8 @@ class MarketDataClient:
                     break
                 yield item
         finally:
-            self._streams.pop(id(queue), None)
-            self._sub_ids.pop(id(queue), None)
+            self._streams.pop(token, None)
+            self._sub_ids.pop(token, None)
             # Nota: no enviamos `forget` aquí porque el `finally` puede ejecutarse
             # con la tarea ya cancelada. Al cerrar la conexión el servidor
             # libera todas las suscripciones; para streams largos usa
@@ -170,6 +186,10 @@ class MarketDataClient:
 
             req_id = msg.get("req_id")
             if req_id is not None:
+                if self._req_id_floor is None:
+                    # El gateway adopta el primer req_id que ve y lo reenvía en
+                    # los mensajes de stream; lo reservamos (ver `_stream`).
+                    self._req_id_floor = int(req_id)
                 fut = self._pending.get(req_id)
                 if fut is not None and not fut.done():
                     fut.set_result(msg)
