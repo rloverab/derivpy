@@ -1,3 +1,11 @@
 __pycache__/
 *.pyc
 .env
+
+# Entorno virtual / caches de desarrollo
+.venv/
+venv/
+.pytest_cache/
+*.egg-info/
+build/
+dist/

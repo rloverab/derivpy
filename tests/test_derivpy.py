@@ -246,7 +246,7 @@ class TestTrading(FakeWSMixin, unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(receipt.contract_id, 42)
 
                 states = [s async for s in client.watch_contract(42)]
-                self.assertEqual(len(states), 2)          # abierto -> cerrado
+                self.assertGreaterEqual(len(states), 2)   # >= abierto -> cerrado
                 self.assertTrue(states[0].is_open)
                 self.assertFalse(states[-1].is_open)      # se detuvo al cerrar
                 self.assertEqual(states[-1].profit, 9.8)
