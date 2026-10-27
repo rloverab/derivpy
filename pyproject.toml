@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "derivpy"
+version = "0.1.0"
+description = "Librería ligera y legible (asyncio) para interactuar con la API de Deriv (www.deriv.com)."
+readme = "README.md"
+requires-python = ">=3.12"
+license = { text = "MIT" }
+authors = [{ name = "Tu nombre" }]
+keywords = ["deriv", "trading", "bot", "websocket", "asyncio"]
+dependencies = [
+    # Única dependencia externa: cliente WebSocket.
+    "websockets>=12.0",
+]
+
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Office/Business :: Financial :: Investment",
+]
+
+[tool.setuptools.packages.find]
+include = ["derivpy*"]
