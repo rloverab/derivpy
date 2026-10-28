@@ -244,7 +244,7 @@ class Symbol(BaseModel):
     pip_size: float = Field(description="ip size (i.e. minimum fluctuation amount).")
     subgroup: str = Field(description="Subgroup name")
     submarket: str = Field(description="Submarket name.")
-    trade_count: str = Field(description="Trade count.")
+    trade_count: int = Field(description="Trade count.")
     underlying_symbol: str = Field(description="The symbol code for this underlying.")
     underlying_symbol_name: str = Field(description="Symbol display name.")
     underlying_symbol_type: str = Field(description="Symbol type (forex, commodities, etc).")
