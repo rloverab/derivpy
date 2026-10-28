@@ -9,12 +9,13 @@ description = "Librería ligera y legible (asyncio) para interactuar con la API 
 readme = "README.md"
 requires-python = ">=3.12"
 license = { text = "MIT" }
-authors = [{ name = "Tu nombre" }]
+authors = [{ name = "Roger Lovera" }]
 keywords = ["deriv", "trading", "bot", "websocket", "asyncio"]
 dependencies = [
     # Única dependencia externa: cliente WebSocket.
     "websockets>=12.0",
-    "python-dotenv>=1.2.4"
+    "python-dotenv>=1.2.4",
+    "pydantic>=2.14.1"
 ]
 
 classifiers = [

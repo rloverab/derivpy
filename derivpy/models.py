@@ -7,8 +7,10 @@ tipado a los campos que interesan en un bot.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from typing import Any
+from typing import Annotated, Any
+
+from pydantic import BaseModel, BeforeValidator, Field
+
 
 
 def _f(value: Any) -> float | None:
@@ -17,17 +19,18 @@ def _f(value: Any) -> float | None:
         return None
     return float(value)
 
+FloatTolerante = Annotated[float | None, BeforeValidator(_f)]
 
-@dataclass(slots=True)
-class Account:
+# @dataclass(slots=True)
+class Account(BaseModel):
     """Cuenta de trading devuelta por ``REST GET /trading/v1/options/accounts``."""
 
-    account_id: str
-    balance: float
-    currency: str
-    group: str
-    status: str
-    account_type: str  # "demo" | "real"
+    account_id: str 
+    balance: float = 0.0
+    currency: str = ""
+    group: str = ""
+    status: str = ""
+    account_type: str = "" # "demo" | "real"
 
     @property
     def is_demo(self) -> bool:
@@ -46,15 +49,15 @@ class Account:
         )
 
 
-@dataclass(slots=True)
-class Tick:
+# @dataclass(slots=True)
+class Tick(BaseModel):
     """Un tick (actualización de precio) del stream ``ticks`` o ``history``."""
 
-    symbol: str
+    symbol: str = ""
     epoch: int
     quote: float
-    bid: float | None = None
-    ask: float | None = None
+    bid: FloatTolerante = None
+    ask: FloatTolerante = None
     pip_size: int = 2
     subscription_id: str | None = None  # id para ``forget``
 
@@ -78,8 +81,8 @@ class Tick:
         )
 
 
-@dataclass(slots=True)
-class Candle:
+# @dataclass(slots=True)
+class Candle(BaseModel):
     """Una vela OHLC de ``ticks_history`` con ``style='candles'``."""
 
     epoch: int
@@ -89,16 +92,16 @@ class Candle:
     close: float
 
 
-@dataclass(slots=True)
-class Proposal:
+# @dataclass(slots=True)
+class Proposal(BaseModel):
     """Respuesta a ``proposal``: cotización para comprar un contrato."""
 
     id: str                # se pasa a ``buy``
-    ask_price: float       # precio máximo a pagar
-    payout: float          # pago potencial
-    spot: float            # spot actual del subyacente
+    ask_price: float = 0.0 # precio máximo a pagar
+    payout: float = 0.0    # pago potencial
+    spot: float = 0.0      # spot actual del subyacente
     longcode: str = ""
-    raw: dict[str, Any] = field(default_factory=dict, repr=False)
+    raw: dict[str, Any] = Field(default_factory=dict, repr=False)
 
     @classmethod
     def from_api(cls, d: dict[str, Any]) -> Proposal:
@@ -112,15 +115,15 @@ class Proposal:
         )
 
 
-@dataclass(slots=True)
-class BuyReceipt:
+# @dataclass(slots=True)
+class BuyReceipt(BaseModel):
     """Recibo de compra (respuesta a ``buy``)."""
 
     contract_id: int
-    transaction_id: int
-    buy_price: float
-    payout: float
-    balance_after: float
+    transaction_id: int = 0
+    buy_price: float = 0.0
+    payout: float = 0.0
+    balance_after: float = 0.0
     longcode: str = ""
     start_time: int = 0
     purchase_time: int = 0
@@ -139,14 +142,14 @@ class BuyReceipt:
         )
 
 
-@dataclass(slots=True)
-class SellReceipt:
+# @dataclass(slots=True)
+class SellReceipt(BaseModel):
     """Recibo de venta (respuesta a ``sell``)."""
 
-    contract_id: int
-    sold_for: float
-    profit: float
-    balance_after: float
+    contract_id: int = 0
+    sold_for: float = 0.0
+    profit: float = 0.0
+    balance_after: float = 0.0
 
     @classmethod
     def from_api(cls, d: dict[str, Any]) -> SellReceipt:
@@ -158,26 +161,26 @@ class SellReceipt:
         )
 
 
-@dataclass(slots=True)
+# @dataclass(slots=True)
 class OpenContract:
     """Estado vivo de un contrato (respuesta a ``proposal_open_contract``)."""
 
-    contract_id: int
-    status: str                 # e.g. "open", "settled", "sold", "expired"
-    current_spot: float | None = None
-    bid_price: float | None = None
-    ask_price: float | None = None
-    buy_price: float | None = None
-    payout: float | None = None
-    profit: float | None = None
-    entry_spot: float | None = None
-    exit_spot: float | None = None
+    contract_id: int = 0
+    status: str = ""                # e.g. "open", "settled", "sold", "expired"
+    current_spot: FloatTolerante = None
+    bid_price: FloatTolerante = None
+    ask_price: FloatTolerante = None
+    buy_price: FloatTolerante = None
+    payout: FloatTolerante = None
+    profit: FloatTolerante = None
+    entry_spot: FloatTolerante = None
+    exit_spot: FloatTolerante = None
     date_start: int | None = None
     date_expiry: int | None = None
     is_sold: bool = False
     is_expired: bool = False
     is_settled: bool = False
-    raw: dict[str, Any] = field(default_factory=dict, repr=False)
+    raw: dict[str, Any] = Field(default_factory=dict, repr=False)
 
     @property
     def is_open(self) -> bool:
@@ -206,18 +209,18 @@ class OpenContract:
         )
 
 
-@dataclass(slots=True)
-class Balance:
+# @dataclass(slots=True)
+class Balance(BaseModel):
     """Saldo reportado por el stream ``balance``.
 
     La API puede devolver un saldo único (campos en la raíz) o una lista
     ``accounts`` cuando el token cubre varias cuentas.
     """
 
-    balance: float
-    currency: str
+    balance: float = 0.0
+    currency: str = ""
     loginid: str = ""
-    accounts: list[dict[str, Any]] = field(default_factory=list, repr=False)
+    accounts: list[dict[str, Any]] = Field(default_factory=list, repr=False)
 
     @classmethod
     def from_api(cls, d: dict[str, Any]) -> Balance:
@@ -231,14 +234,14 @@ class Balance:
         )
 
 
-@dataclass(slots=True)
-class Symbol:
+# @dataclass(slots=True)
+class Symbol(BaseModel):
     """Instrumento devuelto por ``active_symbols``."""
 
-    symbol: str            # p. ej. "R_100" — se usa como underlying_symbol
-    display_name: str
-    market: str
-    symbol_type: str
+    symbol: str = ""           # p. ej. "R_100" — se usa como underlying_symbol
+    display_name: str = ""
+    market: str = ""
+    symbol_type: str = ""
     exchange_is_open: bool = True
 
     @classmethod
