@@ -68,15 +68,19 @@ class Tick(BaseModel):
         return datetime.fromtimestamp(self.epoch)
 
 
-# @dataclass(slots=True)
 class Candle(BaseModel):
     """Una vela OHLC de ``ticks_history`` con ``style='candles'``."""
 
-    epoch: int
-    open: float
-    high: float
-    low: float
-    close: float
+    id: str = Field(default="", exclude=True)
+    epoch: int = Field(description="It is an epoch value")
+    open: float = Field(description="It is the open price value for the given time")
+    high: float = Field(description="It is the high price value for the given time")
+    low: float = Field(description="It is the low price value for the given time")
+    close: float = Field(description="It is the close price value for the given time")
+    granularity: int = Field(default=0, exclude=True)
+    open_time: int = Field(default=0, exclude=False)
+    pipe_size: int = Field(default=1, exclude=True)
+    symbol: str = Field(default="", exclude=True)
 
 
 # @dataclass(slots=True)

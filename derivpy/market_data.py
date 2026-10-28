@@ -22,7 +22,7 @@ import contextlib
 import json
 import logging
 from collections.abc import AsyncIterator
-from typing import Any
+from typing import Any, Literal
 
 import websockets
 
@@ -248,7 +248,7 @@ class MarketDataClient:
         self,
         symbol: str,
         *,
-        granularity: int = 60,
+        granularity: Literal[60, 120, 180, 300, 600, 900, 1800, 3600, 7200, 14400, 28800, 86400] = 60,
         count: int = 100,
         end: str = "latest",
         start: int | None = None,
@@ -273,13 +273,7 @@ class MarketDataClient:
             payload["start"] = start
         resp = await self.request(payload)
         return [
-            Candle(
-                epoch=int(c["epoch"]),
-                open=float(c["open"]),
-                high=float(c["high"]),
-                low=float(c["low"]),
-                close=float(c["close"]),
-            )
+            Candle.model_validate(c)
             for c in resp.get("candles", [])
         ]
 
@@ -289,20 +283,18 @@ class MarketDataClient:
             if msg.get("tick"):
                 yield Tick.model_validate(msg["tick"])
 
-    async def stream_candles(self, symbol: str, *, granularity: int = 60) -> AsyncIterator[Candle]:
+    async def stream_candles(
+            self, 
+            symbol: str, 
+            *, 
+            granularity: Literal[60, 120, 180, 300, 600, 900, 1800, 3600, 7200, 14400, 28800, 86400] = 60) -> AsyncIterator[Candle]:
         """Stream en vivo de velas OHLC (``ohlc`` + ``subscribe``)."""
         async for msg in self._stream(
             {"ticks_history": symbol, "end": "latest", "style": "candles", "granularity": granularity}
         ):
             ohlc = msg.get("ohlc")
             if ohlc:
-                yield Candle(
-                    epoch=int(ohlc["open_epoch"]),
-                    open=float(ohlc["open"]),
-                    high=float(ohlc["high"]),
-                    low=float(ohlc["low"]),
-                    close=float(ohlc["close"]),
-                )
+                yield Candle.model_validate(ohlc)
 
 
 def _response_type(request_type: str) -> str:
