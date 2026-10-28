@@ -287,7 +287,7 @@ class MarketDataClient:
         """Stream en vivo de ticks de un símbolo (``ticks`` + ``subscribe``)."""
         async for msg in self._stream({"ticks": symbol}):
             if msg.get("tick"):
-                yield Tick.from_api(msg["tick"], symbol=symbol)
+                yield Tick.model_validate(msg["tick"])
 
     async def stream_candles(self, symbol: str, *, granularity: int = 60) -> AsyncIterator[Candle]:
         """Stream en vivo de velas OHLC (``ohlc`` + ``subscribe``)."""

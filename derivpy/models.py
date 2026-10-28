@@ -49,17 +49,16 @@ class Account(BaseModel):
         )
 
 
-# @dataclass(slots=True)
 class Tick(BaseModel):
     """Un tick (actualización de precio) del stream ``ticks`` o ``history``."""
 
     symbol: str = ""
     epoch: int
     quote: float
-    bid: FloatTolerante = None
-    ask: FloatTolerante = None
+    bid: FloatTolerante = Field(default=None, exclude=True)
+    ask: FloatTolerante = Field(default=None, exclude=True)
     pip_size: int = 2
-    subscription_id: str | None = None  # id para ``forget``
+    subscription_id: str | None = Field(default=None, exclude=True)  # id para ``forget``
 
     @property
     def datetime(self):
@@ -67,18 +66,6 @@ class Tick(BaseModel):
         from datetime import datetime
 
         return datetime.fromtimestamp(self.epoch)
-
-    @classmethod
-    def from_api(cls, d: dict[str, Any], symbol: str = "") -> Tick:
-        return cls(
-            symbol=d.get("symbol", symbol),
-            epoch=int(d.get("epoch", 0)),
-            quote=_f(d.get("quote")) or 0.0,
-            bid=_f(d.get("bid")),
-            ask=_f(d.get("ask")),
-            pip_size=int(_f(d.get("pip_size")) or 2),
-            subscription_id=(d.get("subscription") or {}).get("id"),
-        )
 
 
 # @dataclass(slots=True)
