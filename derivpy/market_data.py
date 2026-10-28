@@ -210,7 +210,7 @@ class MarketDataClient:
             payload["contract_type"] = [contract_type]
         resp = await self.request(payload)
         key = "active_symbols" if "active_symbols" in resp else "underlying"
-        return [Symbol.from_api(d) for d in resp.get(key, [])]
+        return [Symbol.model_validate(d) for d in resp.get(key, [])]
 
     async def ticks_history(
         self,

@@ -7,7 +7,7 @@ tipado a los campos que interesan en un bot.
 
 from __future__ import annotations
 
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, BeforeValidator, Field
 
@@ -238,18 +238,13 @@ class Balance(BaseModel):
 class Symbol(BaseModel):
     """Instrumento devuelto por ``active_symbols``."""
 
-    symbol: str = ""           # p. ej. "R_100" — se usa como underlying_symbol
-    display_name: str = ""
-    market: str = ""
-    symbol_type: str = ""
-    exchange_is_open: bool = True
-
-    @classmethod
-    def from_api(cls, d: dict[str, Any]) -> Symbol:
-        return cls(
-            symbol=d.get("symbol", ""),
-            display_name=d.get("display_name", ""),
-            market=d.get("market", ""),
-            symbol_type=d.get("symbol_type", ""),
-            exchange_is_open=bool(d.get("exchange_is_open", True)),
-        )
+    exchange_is_open: Literal[0, 1] = Field(description="1 if market is currently open, 0 if closed.")
+    is_trading_suspended: Literal[0, 1] = Field(description="1 indicates that trading is currently suspended, 0 if not.")
+    market: str = Field(description="Market category (forex, indices, etc).")
+    pip_size: float = Field(description="ip size (i.e. minimum fluctuation amount).")
+    subgroup: str = Field(description="Subgroup name")
+    submarket: str = Field(description="Submarket name.")
+    trade_count: str = Field(description="Trade count.")
+    underlying_symbol: str = Field(description="The symbol code for this underlying.")
+    underlying_symbol_name: str = Field(description="Symbol display name.")
+    underlying_symbol_type: str = Field(description="Symbol type (forex, commodities, etc).")
