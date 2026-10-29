@@ -289,12 +289,12 @@ async def _coro(value):
 # Smoke test de modelos puros (sin red)
 class TestModels(unittest.TestCase):
     def test_tick_from_api(self):
-        t = Tick.from_api({"symbol": "R_10", "epoch": 1, "quote": "10.5", "pip_size": "1"})
+        t = Tick.model_validate({"symbol": "R_10", "epoch": 1, "quote": "10.5", "pip_size": "1"})
         self.assertEqual(t.quote, 10.5)
         self.assertEqual(t.pip_size, 1)
 
     def test_open_contract_is_open(self):
-        oc = OpenContract.from_api({"contract_id": 1, "status": "open", "is_sold": 0,
+        oc = OpenContract.model_validate({"contract_id": 1, "status": "open", "is_sold": 0,
                                     "is_expired": 0, "is_settled": 0})
         self.assertTrue(oc.is_open)
 

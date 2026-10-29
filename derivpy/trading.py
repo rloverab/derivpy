@@ -499,7 +499,7 @@ class TradingClient:
     async def get_contract(self, contract_id: int) -> OpenContract:
         """Estado puntual de un contrato (``proposal_open_contract`` sin subscribir)."""
         resp = await self.request({"proposal_open_contract": 1, "contract_id": contract_id})
-        return OpenContract.from_api(resp["proposal_open_contract"])
+        return OpenContract.model_validate(resp["proposal_open_contract"])
 
     async def watch_contract(
         self, contract_id: int, stop_when_closed: bool = True
@@ -514,7 +514,7 @@ class TradingClient:
         queue: asyncio.Queue[OpenContract | None] = asyncio.Queue()
 
         def _on_msg(msg: dict[str, Any]) -> None:
-            oc = OpenContract.from_api(msg["proposal_open_contract"])
+            oc = OpenContract.model_validate(msg["proposal_open_contract"])
             queue.put_nowait(oc)
             if stop_when_closed and not oc.is_open:
                 queue.put_nowait(None)
@@ -522,7 +522,7 @@ class TradingClient:
         initial = await self.subscribe(
             {"proposal_open_contract": 1, "contract_id": contract_id}, _on_msg
         )
-        first = OpenContract.from_api(initial["proposal_open_contract"])
+        first = OpenContract.model_validate(initial["proposal_open_contract"])
         yield first
         try:
             if stop_when_closed and not first.is_open:

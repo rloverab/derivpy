@@ -8,7 +8,7 @@ tipado a los campos que interesan en un bot.
 from __future__ import annotations
 
 from typing import Annotated, Any, Literal
-from pydantic import BaseModel, BeforeValidator, Field
+from pydantic import BaseModel, BeforeValidator, Field, model_validator
 
 
 def _f(value: Any) -> float | None:
@@ -147,7 +147,7 @@ class SellReceipt(BaseModel):
         )
 
 
-class OpenContract:
+class OpenContract(BaseModel):
     """Estado vivo de un contrato (respuesta a ``proposal_open_contract``)."""
 
     contract_id: int = 0
@@ -165,33 +165,19 @@ class OpenContract:
     is_sold: bool = False
     is_expired: bool = False
     is_settled: bool = False
-    raw: dict[str, Any] = Field(default_factory=dict, repr=False)
+    raw: dict[str, Any] = Field(default_factory=dict, repr=False, exclude=True)
 
     @property
     def is_open(self) -> bool:
         """True mientras el contrato siga abierto (vendible/expirable)."""
         return not (self.is_sold or self.is_expired or self.is_settled)
 
+    @model_validator(mode='before')
     @classmethod
-    def from_api(cls, d: dict[str, Any]) -> OpenContract:
-        return cls(
-            contract_id=int(d.get("contract_id", 0)),
-            status=d.get("status", ""),
-            current_spot=_f(d.get("current_spot")),
-            bid_price=_f(d.get("bid_price")),
-            ask_price=_f(d.get("ask_price")),
-            buy_price=_f(d.get("buy_price")),
-            payout=_f(d.get("payout")),
-            profit=_f(d.get("profit")),
-            entry_spot=_f(d.get("entry_spot")),
-            exit_spot=_f(d.get("exit_spot")),
-            date_start=d.get("date_start"),
-            date_expiry=d.get("date_expiry"),
-            is_sold=bool(d.get("is_sold")),
-            is_expired=bool(d.get("is_expired")),
-            is_settled=bool(d.get("is_settled")),
-            raw=d,
-        )
+    def save_raw_data(cls, data: Any) -> Any:
+        if isinstance(data, dict):
+            data['raw'] = data.copy()
+        return data
 
 
 class Balance(BaseModel):
