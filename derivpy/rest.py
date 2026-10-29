@@ -93,7 +93,14 @@ class RestClient:
         req = urllib.request.Request(url, data=data, headers=headers, method=method.upper())
         try:
             with urllib.request.urlopen(req, timeout=self.timeout) as resp:
-                payload = json.loads(resp.read().decode() or "{}")
+                raw_data = resp.read().decode()
+                if not raw_data:
+                    return {}
+                
+                try:
+                    payload = json.loads(raw_data)
+                except:
+                    return raw_data
         except urllib.error.HTTPError as exc:
             self._handle_http_error(exc)
         except (urllib.error.URLError, TimeoutError, OSError) as exc:
