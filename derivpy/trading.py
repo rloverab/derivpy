@@ -28,7 +28,7 @@ import websockets
 
 from . import _constants as C
 from .exceptions import DerivAuthError, DerivConnectionError, DerivTimeoutError
-from .models import Balance, BuyReceipt, Contract, OpenContract, Proposal, SellReceipt
+from .models import Balance, BuyReceipt, Contract, OpenContract, Proposal, SellReceipt, Transaction
 from .rest import RestClient
 
 logger = logging.getLogger("derivpy.trading")
@@ -347,10 +347,14 @@ class TradingClient:
         resp = await self.request(payload)
         return resp.get("transactions", [])
 
-    async def get_statement(self, **params: Any) -> list[dict[str, Any]]:
+    async def get_statement(self, **params: Any) -> list[Transaction]:
         """``statement`` — extracto de movimientos (``limit``, ``date_from``…)."""
-        resp = await self.request({"statement": 1, **params})
-        return resp.get("statements", [])
+        resp = await self.request({"statement": 1, **params})        
+        statement = resp.get("statement", {})
+        if statement:
+            transactions = statement.get("transactions", [])
+            return [Transaction.model_validate(transaction) for transaction in transactions]
+        return []
 
     async def get_profit_table(self, **params: Any) -> list[dict[str, Any]]:
         """``profit_table`` — tabla de resultados (``sortby``, ``limit``…)."""

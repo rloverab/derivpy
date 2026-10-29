@@ -248,3 +248,19 @@ class Contract(BaseModel):
     shortcode: str = Field(default="", description="Contract short code description")
     transaction_id: int = Field(default=0, description="It is the transaction ID. Every contract (buy or sell) and every payment has a unique ID")
     underlying_symbol: str = Field(default="", description="Symbol code")
+
+class Transaction(BaseModel):
+    """Instrumento devuelto por ``statement``."""
+
+    action_type: Literal["buy", "sell", "deposit", "withdrawal", "adjustment"] = Field(description="It is the type of action.")
+    amount: float = Field(default=0.0, description="It is the amount of transaction.")
+    app_id: str | None = Field(default=None, description="ID of the application where this contract was purchased.")
+    balance_after: float = Field(default=0.0, description="It is the remaining balance.")
+    contract_id: int | None = Field(default=None, description="It is the contract ID.")
+    longcode: str = Field(default="", description="The description of contract purchased if description is set to 1.")
+    payout: float | None = Field(default=None, description="Payout price")
+    purchase_time: int = Field(default=0, description="Time at which contract was purchased, present only for sell transaction")
+    reference_id: int | None = Field(default=None, description="Internal transaction identifier for the corresponding buy transaction ( set only for contract selling )")
+    shortcode: str | None = Field(default=None, description="Compact description of the contract purchased if description is set to 1.")
+    transaction_id: int = Field(default=0, description="It is the transaction ID. In statement every contract (buy or sell) and every payment has a unique ID.")
+    transaction_time: int = Field(default=0, description="It is the time of transaction.")
