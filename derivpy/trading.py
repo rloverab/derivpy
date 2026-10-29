@@ -22,7 +22,7 @@ import contextlib
 import json
 import logging
 from collections.abc import AsyncIterator, Awaitable, Callable
-from typing import Any
+from typing import Any, Literal
 
 import websockets
 
@@ -347,14 +347,61 @@ class TradingClient:
         resp = await self.request(payload)
         return resp.get("transactions", [])
 
-    async def get_statement(self, **params: Any) -> list[Transaction]:
-        """``statement`` — extracto de movimientos (``limit``, ``date_from``…)."""
-        resp = await self.request({"statement": 1, **params})        
-        statement = resp.get("statement", {})
-        if statement:
-            transactions = statement.get("transactions", [])
-            return [Transaction.model_validate(transaction) for transaction in transactions]
-        return []
+    async def get_statement(
+            self, 
+            action_type: Literal["buy", "sell", "deposit", "withdrawal"] | None = None,
+            date_from: int | None = None,
+            date_to: int | None = None,
+            description: Literal[0, 1] | None = None,
+            limit: int | None = None,
+            offset: int | None = None,
+            passthrough: dict | None = None,
+            req_id: int | None = None
+    ) -> list[Transaction]:
+        """
+        ``statement`` — Retrieve account statement
+
+        Args:
+            action_type (str, optional): {'buy', 'sell', 'deposit', 'withdrawal'}. To filter the statement according to the type of transaction.
+            date_from: (int, optional): Start date (epoch). Minimum: 0 · Maximum: 9999999999
+            date_to: (int, optional): End date (epoch). Minimum: 0 · Maximum: 9999999999
+            description: (int, optional): If set to 1, will return full contracts description.
+            limit: (int, optional):  Maximum number of transactions to receive. Minimum: 0 · Maximum: 999. Default: 100
+            offset: (int, optional): Number of transactions to skip. Minimum: 0
+            passthrough: (dict, optional): Used to pass data through the websocket, which may be retrieved via the echo_req output field.
+            req_id: (int, optional): Used to map request to response.
+        """
+        payload = {"statement": 1}
+
+        if action_type is not None:
+            payload["action_type"] = action_type
+            
+        if date_from is not None:
+            payload["date_from"] = min(max(0,date_from), 9999999999)
+
+        if date_to is not None:
+            payload["date_to"] = min(max(0,date_to), 9999999999)
+
+        if description is not None:
+            payload["description"] = description
+
+        if limit is not None:
+            payload["limit"] = min(max(0, limit),999)
+
+        if offset is not None:
+            payload["offset"] = max(0, offset)
+
+        if passthrough is not None:
+            payload["passthrough"] = passthrough
+
+        if req_id is not None:
+            payload["req_id"] = req_id
+
+        resp = await self.request(payload)
+
+        statement = resp.get("statement") or {}
+        transactions = statement.get("transactions") or []
+        return [Transaction.model_validate(transaction) for transaction in transactions]
 
     async def get_profit_table(self, **params: Any) -> list[dict[str, Any]]:
         """``profit_table`` — tabla de resultados (``sortby``, ``limit``…)."""
