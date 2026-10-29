@@ -8,9 +8,7 @@ tipado a los campos que interesan en un bot.
 from __future__ import annotations
 
 from typing import Annotated, Any, Literal
-
 from pydantic import BaseModel, BeforeValidator, Field
-
 
 
 def _f(value: Any) -> float | None:
@@ -21,7 +19,7 @@ def _f(value: Any) -> float | None:
 
 FloatTolerante = Annotated[float | None, BeforeValidator(_f)]
 
-# @dataclass(slots=True)
+
 class Account(BaseModel):
     """Cuenta de trading devuelta por ``REST GET /trading/v1/options/accounts``."""
 
@@ -83,7 +81,6 @@ class Candle(BaseModel):
     symbol: str = Field(default="", exclude=True)
 
 
-# @dataclass(slots=True)
 class Proposal(BaseModel):
     """Respuesta a ``proposal``: cotización para comprar un contrato."""
 
@@ -106,7 +103,6 @@ class Proposal(BaseModel):
         )
 
 
-# @dataclass(slots=True)
 class BuyReceipt(BaseModel):
     """Recibo de compra (respuesta a ``buy``)."""
 
@@ -133,7 +129,6 @@ class BuyReceipt(BaseModel):
         )
 
 
-# @dataclass(slots=True)
 class SellReceipt(BaseModel):
     """Recibo de venta (respuesta a ``sell``)."""
 
@@ -152,7 +147,6 @@ class SellReceipt(BaseModel):
         )
 
 
-# @dataclass(slots=True)
 class OpenContract:
     """Estado vivo de un contrato (respuesta a ``proposal_open_contract``)."""
 
@@ -200,7 +194,6 @@ class OpenContract:
         )
 
 
-# @dataclass(slots=True)
 class Balance(BaseModel):
     """Saldo reportado por el stream ``balance``.
 
@@ -225,7 +218,6 @@ class Balance(BaseModel):
         )
 
 
-# @dataclass(slots=True)
 class Symbol(BaseModel):
     """Instrumento devuelto por ``active_symbols``."""
 
@@ -239,3 +231,20 @@ class Symbol(BaseModel):
     underlying_symbol: str = Field(description="The symbol code for this underlying.")
     underlying_symbol_name: str = Field(description="Symbol display name.")
     underlying_symbol_type: str = Field(description="Symbol type (forex, commodities, etc).")
+
+class Contract(BaseModel):
+    """Instrumento devuelto por ``portfolio``."""
+
+    auto_run_id: str = Field(default="", description="Identifier of the automated run that purchased this contract", exclude=True)
+    buy_price: float = Field(default=0.0, description="Buy price")
+    contract_id: int = Field(default=0, description="Internal contract identifier number (to be used in a proposal_open_contract API call)")
+    contract_type: str = Field(default="", description="Contract type")
+    currency: str = Field(default="", description="Contract currency")
+    date_start: int = Field(default=0, description="Epoch of start date")
+    expiry_time: int = Field(default=0, description="Epoch of expiry time")
+    longcode: str = Field(default="", description="Contract description")
+    payout: float = Field(default=0.0, description="Payout price")
+    purchase_time: int = Field(default=0, description="Epoch of purchase time")
+    shortcode: str = Field(default="", description="Contract short code description")
+    transaction_id: int = Field(default=0, description="It is the transaction ID. Every contract (buy or sell) and every payment has a unique ID")
+    underlying_symbol: str = Field(default="", description="Symbol code")

@@ -28,7 +28,7 @@ import websockets
 
 from . import _constants as C
 from .exceptions import DerivAuthError, DerivConnectionError, DerivTimeoutError
-from .models import Balance, BuyReceipt, OpenContract, Proposal, SellReceipt
+from .models import Balance, BuyReceipt, Contract, OpenContract, Proposal, SellReceipt
 from .rest import RestClient
 
 logger = logging.getLogger("derivpy.trading")
@@ -330,10 +330,14 @@ class TradingClient:
 
         return await self.subscribe({"balance": 1}, _on_msg)
 
-    async def get_portfolio(self) -> list[dict[str, Any]]:
+    async def get_portfolio(self) -> list[Contract]:
         """``portfolio`` — contratos abiertos (lista cruda)."""
         resp = await self.request({"portfolio": 1})
-        return resp.get("portfolio", [])
+        portfolio = resp.get("portfolio", {})
+        if portfolio:
+            contracts = portfolio.get("contracts", [])
+            return [Contract.model_validate(contract) for contract in contracts]
+        return []
 
     async def get_transactions(self, subscribe: bool = False) -> list[dict[str, Any]]:
         """``transaction`` — historial de transacciones recientes."""
