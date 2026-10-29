@@ -19,6 +19,8 @@ import urllib.parse
 import urllib.request
 from typing import Any
 
+from derivpy.models import Account
+
 from . import _constants as C
 from .exceptions import DerivAPIError, DerivAuthError, DerivConnectionError, DerivRateLimitError
 
@@ -123,10 +125,11 @@ class RestClient:
         """Versión async de :meth:`request` (corre en un hilo)."""
         return await asyncio.to_thread(self.request, method, path, **kwargs)
 
-    async def list_accounts(self) -> list[dict[str, Any]]:
+    async def list_accounts(self) -> list[Account]:
         """``GET /trading/v1/options/accounts`` — cuentas del usuario."""
         payload = await self.arequest("GET", "/trading/v1/options/accounts")
-        return payload.get("data", [])
+        data = payload.get("data", [])
+        return [Account.model_validate(d) for d in data]
 
     async def get_otp_ws_url(self, account_id: str) -> str:
         """``POST /trading/v1/options/accounts/{accountId}/otp``.
