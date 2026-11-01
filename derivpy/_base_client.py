@@ -26,7 +26,7 @@ class BaseDerivWSClient(ABC):
         url: str,
         *,
         request_timeout: float = 10.0,
-        ping_interval: float = 20.0,  # Crítico para evitar cortes silenciosos
+        ping_interval: float = 30.0,
     ) -> None:
         self._url = url
         self.request_timeout = request_timeout
@@ -45,7 +45,6 @@ class BaseDerivWSClient(ABC):
     async def connect(self) -> None:
         self._closing = False
         try:
-            # Nota: ping_interval y ping_timeout son nativos de websockets y vitales
             self._ws = await websockets.connect(
                 self._url, 
                 open_timeout=self.request_timeout, 
@@ -65,6 +64,7 @@ class BaseDerivWSClient(ABC):
 
     async def disconnect(self) -> None:
         self._closing = True
+        
         if self._ping_task:
             self._ping_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
@@ -152,25 +152,35 @@ class BaseDerivWSClient(ABC):
 
     async def _ping_loop(self) -> None:
         """
-        Envía pings a nivel de aplicación para mantener la conexión viva.
-        Documentación Deriv: Se recomienda enviar un ping cada 30-60 segundos 
-        para evitar el cierre por inactividad del servidor.
+        Envía pings a nivel de aplicación (JSON) para evitar que el servidor 
+        cierre la conexión por inactividad (típicamente a los 120s).
         """
-        if self.ping_interval <= 0:
-            logger.debug("Ping de keep-alive desactivado por configuración.")
-            return
-
-        while not self._closing and self.is_connected:
+        logger.info("✅ Bucle de ping iniciado. Intervalo: %s segundos.", self.ping_interval)
+        
+        while not self._closing:
             try:
                 await asyncio.sleep(self.ping_interval)
-                if not self._closing and self.is_connected:
-                    await self.send({"ping": 1})
-                    logger.debug("Ping de keep-alive (aplicación) enviado.")
+                
+                if self._closing:
+                    break
+                    
+                if self._ws is None:
+                    logger.warning("⚠️ WebSocket es None. Saliendo del bucle de ping.")
+                    break
+
+                # Payload oficial de keep-alive de Deriv
+                payload = {"ping": 1}
+                logger.debug("📤 Enviando ping de aplicación: %s", payload)
+                await self._ws.send(json.dumps(payload))
+                
             except asyncio.CancelledError:
-                logger.debug("Task de ping cancelado limpiamente.")
+                logger.info("🛑 Bucle de ping cancelado limpiamente.")
+                break
+            except websockets.ConnectionClosed:
+                logger.warning("⚠️ Conexión cerrada durante el envío de ping. Saliendo del bucle.")
                 break
             except Exception as exc:
-                logger.warning("Error al enviar ping de keep-alive: %s", exc)
+                logger.error("❌ Error inesperado en bucle de ping: %s", exc)
                 break
 
     async def _reconnect(self) -> bool:
