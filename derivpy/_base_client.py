@@ -7,9 +7,11 @@ import contextlib
 import json
 import websockets
 
+from websockets import State
 from collections.abc import AsyncIterator
 from abc import ABC
 from typing import Any
+    
 
 from . import _constants as C
 from .exceptions import DerivAPIError, DerivConnectionError
@@ -121,7 +123,7 @@ class BaseDerivWSClient(ABC):
     @property
     def is_connected(self) -> bool:
         """True si la conexión WebSocket está activa y no ha sido cerrada."""
-        return self._ws is not None and not self._ws.closed
+        return self._ws is not None and not self._ws.state is State.OPEN
     
     async def _recv_loop(self) -> None:
         while not self._closing:
