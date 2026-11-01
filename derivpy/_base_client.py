@@ -155,7 +155,11 @@ class BaseDerivWSClient(ABC):
         Envía pings a nivel de aplicación (JSON) para evitar que el servidor 
         cierre la conexión por inactividad (típicamente a los 120s).
         """
-        logger.info("✅ Bucle de ping iniciado. Intervalo: %s segundos.", self.ping_interval)
+        logger.info(
+            "✅ [%s] Bucle de ping iniciado. Intervalo: %s segundos.", 
+            self.__class__.__name__, 
+            self.ping_interval
+        )
         
         while not self._closing:
             try:
@@ -165,22 +169,37 @@ class BaseDerivWSClient(ABC):
                     break
                     
                 if self._ws is None:
-                    logger.warning("⚠️ WebSocket es None. Saliendo del bucle de ping.")
+                    logger.warning(
+                        "⚠️ [%s] WebSocket es None. Saliendo del bucle de ping.",
+                        self.__class__.__name__
+                    )
                     break
 
                 # Payload oficial de keep-alive de Deriv
                 payload = {"ping": 1}
-                logger.debug("📤 Enviando ping de aplicación: %s", payload)
+                logger.debug(
+                    "📤 [%s] Enviando ping de aplicación: %s", 
+                    self.__class__.__name__, payload
+                )
                 await self._ws.send(json.dumps(payload))
                 
             except asyncio.CancelledError:
-                logger.info("🛑 Bucle de ping cancelado limpiamente.")
+                logger.info(
+                    "🛑 [%s] Bucle de ping cancelado limpiamente.", 
+                    self.__class__.__name__
+                )
                 break
             except websockets.ConnectionClosed:
-                logger.warning("⚠️ Conexión cerrada durante el envío de ping. Saliendo del bucle.")
+                logger.warning(
+                    "⚠️ [%s] Conexión cerrada durante el envío de ping. Saliendo del bucle.", 
+                    self.__class__.__name__
+                )
                 break
             except Exception as exc:
-                logger.error("❌ Error inesperado en bucle de ping: %s", exc)
+                logger.error(
+                    "❌ [%s] Error inesperado en bucle de ping: %s", 
+                    self.__class__.__name__, exc
+                )
                 break
 
     async def _reconnect(self) -> bool:
