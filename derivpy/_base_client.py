@@ -55,12 +55,19 @@ class BaseDerivWSClient(ABC):
             raise DerivConnectionError(f"Fallo de conexión a {self._url}: {exc}") from exc
         
         self._recv_task = asyncio.create_task(self._recv_loop(), name="deriv-recv")
+
+        if self.ping_interval > 0:
+            self._ping_task = asyncio.create_task(self._ping_loop(), name="deriv-ping")
+
         await self._on_connected()  # Hook para clases hijas
 
     async def disconnect(self) -> None:
         self._closing = True
         if self._ping_task:
             self._ping_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await self._ping_task
+                
         if self._recv_task:
             self._recv_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
@@ -140,6 +147,29 @@ class BaseDerivWSClient(ABC):
             
             # Hook para que la clase hija procese streams (colas o callbacks)
             await self._process_stream_message(msg)
+
+    async def _ping_loop(self) -> None:
+        """
+        Envía pings a nivel de aplicación para mantener la conexión viva.
+        Documentación Deriv: Se recomienda enviar un ping cada 30-60 segundos 
+        para evitar el cierre por inactividad del servidor.
+        """
+        if self.ping_interval <= 0:
+            logger.debug("Ping de keep-alive desactivado por configuración.")
+            return
+
+        while not self._closing and self.is_connected:
+            try:
+                await asyncio.sleep(self.ping_interval)
+                if not self._closing and self.is_connected:
+                    await self.send({"ping": 1})
+                    logger.debug("Ping de keep-alive (aplicación) enviado.")
+            except asyncio.CancelledError:
+                logger.debug("Task de ping cancelado limpiamente.")
+                break
+            except Exception as exc:
+                logger.warning("Error al enviar ping de keep-alive: %s", exc)
+                break
 
     async def _reconnect(self) -> bool:
         """Reintenta conectar con backoff exponencial."""
