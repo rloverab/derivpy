@@ -19,10 +19,9 @@ import urllib.parse
 import urllib.request
 from typing import Any
 
-from derivpy.models import Account
-
 from . import _constants as C
 from .exceptions import DerivAPIError, DerivAuthError, DerivConnectionError, DerivRateLimitError
+from .models import Account
 
 #: Códigos de error de WebSocket/REST que implican problemas de autenticación.
 _AUTH_CODES = {"InvalidToken", "Unauthorized", "AccessDenied", "AuthorizationRequired"}
@@ -68,7 +67,7 @@ class RestClient:
         *,
         params: dict[str, Any] | None = None,
         body: dict[str, Any] | None = None,
-    ) -> dict[str, Any]:
+    ) -> Any:
         """Ejecuta una petición REST y devuelve el JSON decodificado.
 
         Raises:

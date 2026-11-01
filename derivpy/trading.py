@@ -19,16 +19,14 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-import json
 import logging
 from collections.abc import AsyncIterator, Awaitable, Callable
 from typing import Any, Literal
 
-import websockets
-
 from . import _constants as C
-from .exceptions import DerivAuthError, DerivConnectionError, DerivTimeoutError
-from .models import Balance, BuyReceipt, Contract, OpenContract, Proposal, SellReceipt, Transaction
+from ._base_client import BaseDerivWSClient
+from .exceptions import DerivAuthError, DerivConnectionError
+from .models import Balance, BuyReceipt, OpenContract, Proposal, SellReceipt, Contract, Transaction
 from .rest import RestClient
 
 logger = logging.getLogger("derivpy.trading")
@@ -37,7 +35,7 @@ logger = logging.getLogger("derivpy.trading")
 StreamHandler = Callable[[dict[str, Any]], Any | Awaitable[Any]]
 
 
-class TradingClient:
+class TradingClient(BaseDerivWSClient):
     """Cliente autenticado para operar sobre una cuenta de Deriv.
 
     Args:
@@ -68,26 +66,13 @@ class TradingClient:
         ping_interval: float = C.DEFAULT_PING_INTERVAL,
         max_reconnect_attempts: int = C.DEFAULT_MAX_RECONNECT_ATTEMPTS,
     ) -> None:
+        super().__init__("", request_timeout=request_timeout, ping_interval=ping_interval)
         self.account_id = str(account_id)
         self._rest = RestClient(token=token, app_id=app_id)
-        self.request_timeout = request_timeout
-        self.ping_interval = ping_interval
         self.max_reconnect_attempts = max_reconnect_attempts
-
-        self._ws: websockets.ClientConnection | None = None
-        self._recv_task: asyncio.Task[None] | None = None
-        self._ping_task: asyncio.Task[None] | None = None
-        self._req_counter = 0
-        #: Primer ``req_id`` visto en un mensaje entrante. Deriv lo "adopta" y lo
-        #: reenvía en los mensajes de stream posteriores; al reservarlo evitamos
-        #: que colisione con nuestras peticiones futuras.
-        self._req_id_floor: int | None = None
-        # req_id -> Future que resuelve la PRIMERA respuesta con ese id.
-        self._pending: dict[int, asyncio.Future[dict[str, Any]]] = {}
-        # msg_type -> handlers de streams (ticks, balance, poc…)
-        self._streams: dict[str, list[StreamHandler]] = {}
+        self._callbacks: dict[str, list[StreamHandler]] = {}
+        self._subscriptions: dict[str, list[tuple[dict[str, Any], StreamHandler]]] = {}
         self._connected = asyncio.Event()
-        self._closing = False
 
     # ------------------------------------------------------------------ #
     # Ciclo de vida
@@ -96,103 +81,23 @@ class TradingClient:
         """Pide un OTP por REST y abre la conexión WebSocket."""
         self._closing = False
         url = await self._rest.get_otp_ws_url(self.account_id)
-        try:
-            self._ws = await websockets.connect(
-                url, open_timeout=self.request_timeout, close_timeout=5
-            )
-        except (OSError, asyncio.TimeoutError, websockets.WebSocketException) as exc:
-            raise DerivConnectionError(f"No se pudo conectar al WebSocket OTP: {exc}") from exc
-
+        self._url = url  # Actualizar URL para la clase base
+        await super().connect()
         self._connected.set()
-        self._recv_task = asyncio.create_task(self._recv_loop(), name="deriv-recv")
-        if self.ping_interval:
-            self._ping_task = asyncio.create_task(self._ping_loop(), name="deriv-ping")
         logger.info("Conectado a gateway de trading (cuenta %s)", self.account_id)
 
     async def disconnect(self) -> None:
-        """Cierra la conexión y cancela las tareas internas."""
-        self._closing = True
         self._connected.clear()
-        for task in (self._recv_task, self._ping_task):
-            if task:
-                task.cancel()
-                with contextlib.suppress(asyncio.CancelledError):
-                    await task
-        self._recv_task = self._ping_task = None
-        if self._ws is not None:
-            with contextlib.suppress(Exception):
-                await self._ws.close()
-            self._ws = None
-        # Fallar todas las peticiones pendientes.
-        for fut in self._pending.values():
-            if not fut.done():
-                fut.set_exception(DerivConnectionError("Conexión cerrada"))
-        self._pending.clear()
-
-    async def __aenter__(self) -> TradingClient:
-        await self.connect()
-        return self
-
-    async def __aexit__(self, *exc_info: object) -> None:
-        await self.disconnect()
+        await super().disconnect()
 
     @property
     def is_connected(self) -> bool:
         """True si la conexión WebSocket está activa."""
-        return self._ws is not None and self._connected.is_set()
+        return super().is_connected and self._connected.is_set()
 
     # ------------------------------------------------------------------ #
     # Envío / recepción
     # ------------------------------------------------------------------ #
-    def _next_req_id(self) -> int:
-        self._req_counter += 1
-        if self._req_id_floor is not None and self._req_counter == self._req_id_floor:
-            # Reservado por el servidor (ver `_req_id_floor`).
-            self._req_counter += 1
-        return self._req_counter
-
-    async def send(self, payload: dict[str, Any]) -> None:
-        """Envía un mensaje JSON crudo (sin esperar respuesta)."""
-        if not self.is_connected or self._ws is None:
-            raise DerivConnectionError("La conexión no está abierta; llama a connect() primero.")
-        try:
-            await self._ws.send(json.dumps(payload))
-        except websockets.WebSocketException as exc:
-            raise DerivConnectionError(f"Fallo al enviar: {exc}") from exc
-
-    async def request(self, payload: dict[str, Any], *, timeout: float | None = None) -> dict[str, Any]:
-        """Envía una petición y espera su primera respuesta (por ``req_id``).
-
-        Las respuestas con objeto ``error`` lanzan la excepción adecuada
-        (:class:`DerivAuthError`, :class:`DerivRateLimitError` o
-        :class:`DerivAPIError`).
-        """
-        from .exceptions import DerivAPIError  # local para evitar ciclo
-
-        req_id = self._next_req_id()
-        message = {**payload, "req_id": req_id}
-        fut: asyncio.Future[dict[str, Any]] = asyncio.get_running_loop().create_future()
-        self._pending[req_id] = fut
-        try:
-            await self.send(message)
-            resp = await asyncio.wait_for(fut, timeout or self.request_timeout)
-        except asyncio.TimeoutError as exc:
-            raise DerivTimeoutError(f"Timeout esperando respuesta a '{payload}'") from exc
-        finally:
-            self._pending.pop(req_id, None)
-
-        err = resp.get("error")
-        if err:
-            code, msg = err.get("code"), err.get("message", "")
-            if code in ("InvalidToken", "AuthorizationRequired", "OTPExpired"):
-                raise DerivAuthError(code, msg)
-            if code == "RateLimit":
-                from .exceptions import DerivRateLimitError
-
-                raise DerivRateLimitError(code, msg)
-            raise DerivAPIError(code, msg)
-        return resp
-
     async def subscribe(self, payload: dict[str, Any], handler: StreamHandler) -> dict[str, Any]:
         """Envía una petición con ``subscribe: 1`` y registra ``handler``.
 
@@ -200,7 +105,11 @@ class TradingClient:
         los siguientes llegan a ``handler`` en caliente.
         """
         msg_type = next(iter(payload))
-        self._streams.setdefault(msg_type, []).append(handler)
+
+        if msg_type not in self._subscriptions:
+            self._subscriptions[msg_type] = []
+        self._subscriptions[msg_type].append((payload, handler))
+        
         try:
             return await self.request({**payload, "subscribe": 1})
         except BaseException:
@@ -212,9 +121,12 @@ class TradingClient:
         if handler is None:
             self._streams.pop(msg_type, None)
         else:
-            handlers = self._streams.get(msg_type, [])
-            if handler in handlers:
-                handlers.remove(handler)
+            subs = self._subscriptions.get(msg_type, [])
+            self._subscriptions[msg_type] = [
+                (payload, h) for payload, h in subs if h != handler
+            ]
+            if not self._subscriptions[msg_type]:
+                self._subscriptions.pop(msg_type, None)
 
     async def forget(self, subscription_id: str) -> dict[str, Any]:
         """``forget`` — cancela una suscripción concreta por su id."""
@@ -225,127 +137,200 @@ class TradingClient:
         return await self.request({"forget_all": list(msg_types)})
 
     # ------------------------------------------------------------------ #
-    # Loops internos + reconexión
+    # Sobrescritura del enrutador de mensajes (usa callbacks, no colas)
     # ------------------------------------------------------------------ #
-    async def _recv_loop(self) -> None:
-        while not self._closing:
-            try:
-                assert self._ws is not None
-                raw = await self._ws.recv()
-            except (websockets.ConnectionClosed, AssertionError):
-                if self._closing:
-                    return
-                logger.warning("Conexión caída; reintentando…")
-                if not await self._reconnect():
-                    return
-                continue
-
-            try:
-                msg = json.loads(raw)
-            except json.JSONDecodeError:
-                logger.debug("Mensaje no-JSON ignorado: %r", raw[:200])
-                continue
-            self._dispatch(msg)
-
-    def _dispatch(self, msg: dict[str, Any]) -> None:
-        """Reparte un mensaje: futures pendientes primero, luego streams."""
-        req_id = msg.get("req_id")
-        if req_id is not None:
-            if self._req_id_floor is None:
-                # El gateway Deriv "adopta" el primer req_id que ve y lo reenvía
-                # en todos los mensajes de stream; lo reservamos para no
-                # colisionar con peticiones propias futuras.
-                self._req_id_floor = int(req_id)
-            fut = self._pending.get(req_id)
-            if fut is not None and not fut.done():
-                fut.set_result(msg)
-                # No hacemos return: un mensaje puede ser respuesta Y stream.
-        for handler in list(self._streams.get(msg.get("msg_type", ""), [])):
+    async def _process_stream_message(self, msg: dict[str, Any]) -> None:
+        """Reparte mensajes a los callbacks registrados."""
+        msg_type = msg.get("msg_type", "")
+        subs = self._subscriptions.get(msg_type, [])
+        for payload, handler in list(subs):
             try:
                 result = handler(msg)
                 if asyncio.iscoroutine(result):
                     asyncio.create_task(result)
-            except Exception:  # un callback roto no debe tumbar el cliente
-                logger.exception("Error en handler de stream %s", msg.get("msg_type"))
-
-    async def _ping_loop(self) -> None:
-        while not self._closing:
-            await asyncio.sleep(self.ping_interval)
-            if self.is_connected:
-                with contextlib.suppress(DerivConnectionError):
-                    await self.send({"ping": 1})
+            except Exception:
+                logger.exception("Error en handler de stream %s", msg_type)
+        
+    # ------------------------------------------------------------------ #
+    # Reconexión (ESPECÍFICO de TradingClient)
+    # ------------------------------------------------------------------ #
+    async def _handle_disconnect(self) -> None:
+        """Limpia colas (por si acaso) y lanza reconexión automática."""
+        await super()._handle_disconnect()  # Limpieza estándar
+        
+        if self._closing:
+            return
+            
+        logger.warning("Conexión de trading caída; intentando reconexión...")
+        if await self._reconnect():
+            logger.info("Reconexión exitosa. Resuscribiendo streams...")
+            await self._resubscribe_all()
+        else:
+            logger.error("Reconexión fallida. Streams no resuscritos.")
+            self._closing = True
+            await self.disconnect()
 
     async def _reconnect(self) -> bool:
-        """Reintenta conectar con backoff exponencial. True si lo logró."""
+        """Reintenta conectar con backoff exponencial."""
         delay = 1.0
         for attempt in range(1, self.max_reconnect_attempts + 1):
             await asyncio.sleep(delay)
             delay = min(delay * 2, 30.0)
-            logger.info("Reconexión %d/%d…", attempt, self.max_reconnect_attempts)
+            logger.info("Intento de reconexión %d/%d…", attempt, self.max_reconnect_attempts)
+
             try:
-                await self.disconnect_quietly()
-                await self.connect()  # pide OTP NUEVO: el anterior caducó
+                for task in (self._recv_task, self._ping_task):
+                    if task:
+                        task.cancel()
+                        with contextlib.suppress(asyncio.CancelledError):
+                            await task  # Esperar a que la cancelación se complete
+                self._recv_task = None
+                self._ping_task = None
+
+                # Cerrar conexión actual silenciosamente
+                with contextlib.suppress(Exception):
+                    if self._ws is not None:
+                        await self._ws.close()
+                        self._ws = None  # Resetear para que connect() parta de cero
+
+                for fut in self._pending.values():
+                    if not fut.done():
+                        fut.set_exception(DerivConnectionError("Reconectando..."))
+                self._pending.clear()
+                
+                await self.connect()  # Pide OTP NUEVO
+
+                logger.info("WebSocket reconectado exitosamente")
                 return True
-            except (DerivConnectionError, DerivAuthError) as exc:
-                logger.warning("Fallo de reconexión: %s", exc)
-        logger.error("No se pudo reconectar tras %d intentos.", self.max_reconnect_attempts)
-        for fut in self._pending.values():
-            if not fut.done():
-                fut.set_exception(DerivConnectionError("Reconexión agotada"))
+            
+            except (DerivConnectionError, DerivAuthError, Exception) as exc:
+                logger.warning("Fallo en intento de reconexión: %s", exc)
+
+        logger.error("No se pudo reconectar tras %d intentos.", self.max_reconnect_attempts)        
         return False
 
-    async def disconnect_quietly(self) -> None:
-        """Cierra sin propagar errores (uso interno de reconexión)."""
-        with contextlib.suppress(Exception):
-            await self.disconnect()
+    async def _resubscribe_all(self) -> None:
+        """Resuscribe todos los streams activos tras una reconexión."""
+        for msg_type, subs in list(self._subscriptions.items()):
+            for payload, handler in subs:
+                try:
+                    logger.debug("Resuscribiendo %s...", msg_type)
+                    await self.request({**payload, "subscribe": 1})
+                except Exception as exc:
+                    logger.error("Error al resuscribir %s: %s", msg_type, exc)
 
-    # ------------------------------------------------------------------ #
-    # API de alto nivel: datos de cuenta
-    # ------------------------------------------------------------------ #
-    async def get_server_time(self) -> int:
-        """``time`` — hora del servidor (epoch)."""
-        resp = await self.request({"time": 1})
-        return int(resp["time"])
-
-    async def get_balance(self, subscribe: bool = False) -> Balance | dict[str, Any]:
+    async def get_balance(self, subscribe: bool = False) -> Balance:
         """``balance`` — saldo actual (o suscripción a cambios)."""
         if subscribe:
             return await self.request({"balance": 1})  # inicial; updates via watch_balance
         resp = await self.request({"balance": 1})
-        return Balance.from_api(resp["balance"])
+        return Balance.model_validate(resp["balance"])
 
-    async def watch_balance(self, handler: Callable[[Balance], Any]) -> dict[str, Any]:
-        """Suscribe el stream ``balance``; ``handler(Balance)`` en cada cambio.
+    async def watch_balance(self) -> AsyncIterator[Balance]:
+        """Stream en vivo del saldo de la cuenta.
+        
+        Ejemplo::
+        
+            async for balance in api.watch_balance():
+                print(f"Saldo actual: {balance.balance} {balance.currency}")
+                if balance.balance < 100:
+                    # Lógica de gestión de riesgo
+                    break  # Cleanup automático en finally
+        """
+        queue: asyncio.Queue[Balance | None] = asyncio.Queue()
+
+        def _on_msg(msg: dict[str, Any]) -> None:
+            bal = msg.get("balance")
+            if bal:
+                queue.put_nowait(Balance.model_validate(bal))
+
+        initial = await self.subscribe({"balance": 1}, _on_msg)
+
+        try:
+            # El saldo inicial siempre viene en la respuesta de suscripción
+            first = initial.get("balance")
+            if first:
+                yield Balance.model_validate(first)
+
+            while True:
+                item = await queue.get()
+                if item is None:
+                    break
+                yield item
+        finally:
+            sub_id = initial.get("subscription", {}).get("id")
+            if sub_id:
+                with contextlib.suppress(Exception):
+                    await self.forget(sub_id)
+            self.remove_handler("balance", _on_msg)
+    
+    async def get_profit_table(
+            self, 
+            contract_type: list[str] | None = None,
+            date_from: str | None = None,
+            date_to: str | None = None,
+            description: Literal[0, 1] | None = None,
+            limit: int | None = None,
+            offset: int | None = None,
+            sort: Literal["ASC", "DESC"] | None = None,
+            passthrough: dict | None = None,
+            req_id: int | None = None
+
+    ) -> list[Contract]:
+        """
+        ``profit_table`` — Retrieve a summary of account profit/loss.
 
         Args:
-            handler: callback (sync o async) que recibe un :class:`Balance`.
-
-        Returns:
-            El mensaje inicial (dict crudo), cuyo ``subscription.id`` sirve para
-            cancelar la suscripción con :meth:`forget`.
+            contract_type (list, optional): Return only contracts of the specified types.
+            date_from (str, optional): Start date (epoch or YYYY-MM-DD). Pattern: ^([0-9]{4}-(0?[1-9]|1[012])-(0?[1-9]|[12][0-9]|3[01])|[0-9]{1,10})$
+            date_to (str, optional): End date (epoch or YYYY-MM-DD). Pattern: ^([0-9]{4}-(0?[1-9]|1[012])-(0?[1-9]|[12][0-9]|3[01])|[0-9]{1,10})$
+            description (int, optional): If set to 1, will return full contracts description.
+            limit (int, optional): Apply upper limit to count of transactions received. Minimum: 0 · Maximum: 500. Default: 50
+            offset (int, optional): Number of transactions to skip. Minimum: 0
+            sort (str, optional): Sort direction. Default: "DESC"
+            passthrough (dict, optional): Used to pass data through the websocket, which may be retrieved via the echo_req output field.
+            req_id (int, optional): Used to map request to response.
         """
+        payload = {"profit_table": 1}
 
-        def _on_msg(msg: dict[str, Any]) -> Any:
-            return handler(Balance.from_api(msg["balance"]))
+        if contract_type is not None:
+            payload["contract_type"] = contract_type
 
-        return await self.subscribe({"balance": 1}, _on_msg)
+        if date_from is not None:
+            payload["date_from"] = date_from
+
+        if date_to is not None:
+            payload["date_to"] = date_to
+
+        if description is not None:
+            payload["description"] = description
+
+        if limit is not None:
+            payload["limit"] = limit
+
+        if offset is not None:
+            payload["offset"] = offset
+
+        if sort is not None:
+            payload["sort"] = sort
+
+        if passthrough is not None:
+            payload["passthrough"] = passthrough
+
+        if req_id is not None:
+            payload["req_id"] = req_id
+
+        resp = await self.request(payload)
+        profit_data = resp.get("profit_table") or {}
+        transactions = profit_data.get("transactions") or []
+        return [Transaction.model_validate(transaction) for transaction in transactions]
 
     async def get_portfolio(self) -> list[Contract]:
         """``portfolio`` — contratos abiertos (lista cruda)."""
         resp = await self.request({"portfolio": 1})
-        portfolio = resp.get("portfolio", {})
-        if portfolio:
-            contracts = portfolio.get("contracts", [])
-            return [Contract.model_validate(contract) for contract in contracts]
-        return []
-
-    async def get_transactions(self, subscribe: bool = False) -> list[dict[str, Any]]:
-        """``transaction`` — historial de transacciones recientes."""
-        payload: dict[str, Any] = {"transaction": 1}
-        if subscribe:
-            payload["subscribe"] = 1
-        resp = await self.request(payload)
-        return resp.get("transactions", [])
+        portfolio = resp.get("portfolio") or {}
+        contracts = portfolio.get("contracts") or []        
+        return [Contract.model_validate(contract) for contract in contracts]
 
     async def get_statement(
             self, 
@@ -403,26 +388,26 @@ class TradingClient:
         transactions = statement.get("transactions") or []
         return [Transaction.model_validate(transaction) for transaction in transactions]
 
-    async def get_profit_table(self, **params: Any) -> list[dict[str, Any]]:
-        """``profit_table`` — tabla de resultados (``sortby``, ``limit``…)."""
-        resp = await self.request({"profit_table": 1, **params})
-        return resp.get("profit_table", [])
+    # async def get_profit_table(self, **params: Any) -> list[dict[str, Any]]:
+    #     """``profit_table`` — tabla de resultados (``sortby``, ``limit``…)."""
+    #     resp = await self.request({"profit_table": 1, **params})
+    #     return resp.get("profit_table", [])
 
     # ------------------------------------------------------------------ #
     # API de alto nivel: cotizar y operar
     # ------------------------------------------------------------------ #
     async def propose(
-        self,
-        *,
-        contract_type: str,
-        underlying_symbol: str,
-        amount: float,
-        duration: int | None = None,
-        duration_unit: str = "t",
-        currency: str = "USD",
-        basis: str = "stake",
-        date_expiry: int | None = None,
-        **extra: Any,
+            self,
+            *,
+            contract_type: str,
+            underlying_symbol: str,
+            amount: float,
+            duration: int | None = None,
+            duration_unit: str = "t",
+            currency: str = "USD",
+            basis: str = "stake",
+            date_expiry: int | None = None,
+            **extra: Any,
     ) -> Proposal:
         """``proposal`` — cotiza un contrato. Campos obligatorios según la doc:
 
@@ -449,7 +434,7 @@ class TradingClient:
         payload.update(extra)
 
         resp = await self.request(payload)
-        return Proposal.from_api(resp["proposal"])
+        return Proposal.model_validate(resp["proposal"])
 
     async def buy(self, proposal_id: str, price: float) -> BuyReceipt:
         """``buy`` — compra el contrato cotizado.
@@ -459,7 +444,7 @@ class TradingClient:
             price: precio máximo aceptado (usa ``ask_price`` de la propuesta).
         """
         resp = await self.request({"buy": proposal_id, "price": price})
-        return BuyReceipt.from_api(resp["buy"])
+        return BuyReceipt.model_validate(resp["buy"])
 
     async def sell(self, contract_id: int, price: float = 0) -> SellReceipt:
         """``sell`` — cierra un contrato abierto.
@@ -469,7 +454,7 @@ class TradingClient:
             price: mínimo aceptado, o ``0`` para vender a mercado.
         """
         resp = await self.request({"sell": contract_id, "price": price})
-        return SellReceipt.from_api(resp["sell"])
+        return SellReceipt.model_validate(resp["sell"])
 
     async def trade(
         self,
