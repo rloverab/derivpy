@@ -44,3 +44,13 @@ CANDLE_GRANULARITIES = (60, 120, 180, 300, 600, 900, 1800, 3600, 7200, 14400, 28
 
 #: Escopes OAuth2 documentados.
 OAUTH_SCOPES = ("payment", "trade", "account_manage", "application_read")
+
+# Mapeo de tipos de petición a tipos de respuesta en la API de Deriv
+REQUEST_TO_RESPONSE_TYPE = {
+    "ticks": "tick",
+    "ticks_history": "ohlc",
+    "balance": "balance",
+    "proposal": "proposal",
+    "proposal_open_contract": "proposal_open_contract",
+    "transaction": "transaction",
+}
