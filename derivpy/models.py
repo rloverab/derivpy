@@ -8,7 +8,7 @@ tipado a los campos que interesan en un bot.
 from __future__ import annotations
 
 from typing import Annotated, Any, Literal
-from pydantic import BaseModel, BeforeValidator, Field, model_validator
+from pydantic import BaseModel, BeforeValidator, Field, model_validator, ConfigDict
 
 
 def _f(value: Any) -> float | None:
@@ -49,6 +49,9 @@ class Account(BaseModel):
 
 class Tick(BaseModel):
     """Un tick (actualización de precio) del stream ``ticks`` o ``history``."""
+    model_config = ConfigDict(
+        frozen=True
+    )
 
     symbol: str = ""
     epoch: int
@@ -89,18 +92,14 @@ class Proposal(BaseModel):
     payout: float = 0.0    # pago potencial
     spot: float = 0.0      # spot actual del subyacente
     longcode: str = ""
-    raw: dict[str, Any] = Field(default_factory=dict, repr=False)
+    raw: dict[str, Any] = Field(default_factory=dict, repr=False, exclude=True)
 
+    @model_validator(mode='before')
     @classmethod
-    def from_api(cls, d: dict[str, Any]) -> Proposal:
-        return cls(
-            id=d["id"],
-            ask_price=float(d.get("ask_price", 0)),
-            payout=float(d.get("payout", 0)),
-            spot=float(d.get("spot", 0)),
-            longcode=d.get("longcode", ""),
-            raw=d,
-        )
+    def save_raw_data(cls, data: Any) -> Any:
+        if isinstance(data, dict):
+            data['raw'] = data.copy()
+        return data
 
 
 class BuyReceipt(BaseModel):
@@ -115,19 +114,6 @@ class BuyReceipt(BaseModel):
     start_time: int = 0
     purchase_time: int = 0
 
-    @classmethod
-    def from_api(cls, d: dict[str, Any]) -> BuyReceipt:
-        return cls(
-            contract_id=int(d["contract_id"]),
-            transaction_id=int(d.get("transaction_id", 0)),
-            buy_price=float(d.get("buy_price", 0)),
-            payout=float(d.get("payout", 0)),
-            balance_after=float(d.get("balance_after", 0)),
-            longcode=d.get("longcode", ""),
-            start_time=int(d.get("start_time", 0)),
-            purchase_time=int(d.get("purchase_time", 0)),
-        )
-
 
 class SellReceipt(BaseModel):
     """Recibo de venta (respuesta a ``sell``)."""
@@ -136,15 +122,6 @@ class SellReceipt(BaseModel):
     sold_for: float = 0.0
     profit: float = 0.0
     balance_after: float = 0.0
-
-    @classmethod
-    def from_api(cls, d: dict[str, Any]) -> SellReceipt:
-        return cls(
-            contract_id=int(d.get("contract_id", 0)),
-            sold_for=float(d.get("sold_for", 0)),
-            profit=float(d.get("profit", 0)),
-            balance_after=float(d.get("balance_after", 0)),
-        )
 
 
 class OpenContract(BaseModel):
@@ -218,6 +195,7 @@ class Symbol(BaseModel):
     underlying_symbol_name: str = Field(description="Symbol display name.")
     underlying_symbol_type: str = Field(description="Symbol type (forex, commodities, etc).")
 
+
 class Contract(BaseModel):
     """Instrumento devuelto por ``portfolio``."""
 
@@ -234,6 +212,7 @@ class Contract(BaseModel):
     shortcode: str = Field(default="", description="Contract short code description")
     transaction_id: int = Field(default=0, description="It is the transaction ID. Every contract (buy or sell) and every payment has a unique ID")
     underlying_symbol: str = Field(default="", description="Symbol code")
+
 
 class Transaction(BaseModel):
     """Instrumento devuelto por ``statement``."""
