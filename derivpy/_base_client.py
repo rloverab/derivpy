@@ -120,10 +120,11 @@ class BaseDerivWSClient(ABC):
             err = resp["error"]
             raise DerivAPIError(err.get("code"), err.get("message", ""))
         return resp
+    
     @property
     def is_connected(self) -> bool:
         """True si la conexión WebSocket está activa y no ha sido cerrada."""
-        return self._ws is not None and not self._ws.state is State.OPEN
+        return self._ws is not None and self._ws.state == State.OPEN
     
     async def _recv_loop(self) -> None:
         while not self._closing:
