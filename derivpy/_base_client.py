@@ -39,18 +39,21 @@ class BaseDerivWSClient(ABC):
         self._req_id_floor: int | None = None
         self._pending: dict[int, asyncio.Future[dict[str, Any]]] = {}
         self._streams: dict[int, tuple[set[str], asyncio.Queue]] = {}
-        self._closing = False        
+        self._closing = False
+        self._reconnect_lock = asyncio.Lock()       # 🆕 Evita reconexiones paralelas
+        self._connection_event = asyncio.Event()    # 🆕 Señaliza cuando la conexión es estable
 
 
     async def connect(self) -> None:
         self._closing = False
+        self._connection_event.clear()      # 🆕 Marcar como inestable durante la conexión
         try:
             self._ws = await websockets.connect(
                 self._url, 
                 open_timeout=self.request_timeout, 
                 close_timeout=5,
-                ping_interval=self.ping_interval,
-                ping_timeout=10
+                ping_interval=None,     # ⚠️ CRÍTICO: Desactivar ping nativo de websockets
+                ping_timeout=None       # ⚠️ CRÍTICO: Delegar todo a nuestro _ping_loop
             )
         except (OSError, asyncio.TimeoutError, websockets.WebSocketException) as exc:
             raise DerivConnectionError(f"Fallo de conexión a {self._url}: {exc}") from exc
@@ -60,9 +63,11 @@ class BaseDerivWSClient(ABC):
         if self.ping_interval > 0:
             self._ping_task = asyncio.create_task(self._ping_loop(), name="deriv-ping")
 
-        await self._on_connected()  # Hook para clases hijas
+        await self._on_connected()      # Hook para clases hijas
+        self._connection_event.set()    # 🆕 Marcar como estable
 
     async def disconnect(self) -> None:
+        self._connection_event.clear()  # 🆕
         self._closing = True
         
         if self._ping_task:
@@ -268,18 +273,27 @@ class BaseDerivWSClient(ABC):
                 q.put_nowait(None)
             return
 
-        # Desconexión inesperada: intentar reconexión
-        logger.warning("Conexión de market data caída; intentando reconexión...")
-        if await self._reconnect():
-            logger.info("Reconexión exitosa. Resuscribiendo streams...")
-            await self._resubscribe_all()
-        else:
-            logger.error("Reconexión fallida. Cerrando streams.")
-            for _, (_, q) in self._streams.items():
-                q.put_nowait(None)
-            self._closing = True
-            await self.disconnect()
+        # 🆕 Usar Lock para garantizar que solo una tarea maneje la reconexión
+        async with self._reconnect_lock:
+            # Doble check: si mientras esperábamos el lock otra tarea ya nos reconectó, salir.
+            if self.is_connected:
+                return
 
+            
+            self._connection_event.clear()
+            # Desconexión inesperada: intentar reconexión
+            logger.warning("[%s] Conexión caída; iniciando reconexión segura...", self.__class__.__name__)
+        
+            if await self._reconnect():
+                logger.info("[%s] Reconexión exitosa. Resuscribiendo streams...", self.__class__.__name__)
+                await self._resubscribe_all()
+                self._connection_event.set()    # 🆕 Motor puede reanudar operaciones
+            else:
+                logger.error("[%s] Reconexión fallida tras múltiples intentos.", self.__class__.__name__)
+                for _, (_, q) in self._streams.items():
+                    q.put_nowait(None)
+                self._closing = True
+                await self.disconnect()
 
     async def _process_stream_message(self, msg: dict[str, Any]) -> None:
         """Enrutador genérico: envía el mensaje a las colas registradas."""

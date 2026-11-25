@@ -150,75 +150,7 @@ class TradingClient(BaseDerivWSClient):
                     asyncio.create_task(result)
             except Exception:
                 logger.exception("Error en handler de stream %s", msg_type)
-        
-    # ------------------------------------------------------------------ #
-    # Reconexión (ESPECÍFICO de TradingClient)
-    # ------------------------------------------------------------------ #
-    async def _handle_disconnect(self) -> None:
-        """Limpia colas (por si acaso) y lanza reconexión automática."""
-        await super()._handle_disconnect()  # Limpieza estándar
-        
-        if self._closing:
-            return
-            
-        logger.warning("Conexión de trading caída; intentando reconexión...")
-        if await self._reconnect():
-            logger.info("Reconexión exitosa. Resuscribiendo streams...")
-            await self._resubscribe_all()
-        else:
-            logger.error("Reconexión fallida. Streams no resuscritos.")
-            self._closing = True
-            await self.disconnect()
-
-    async def _reconnect(self) -> bool:
-        """Reintenta conectar con backoff exponencial."""
-        delay = 1.0
-        for attempt in range(1, self.max_reconnect_attempts + 1):
-            await asyncio.sleep(delay)
-            delay = min(delay * 2, 30.0)
-            logger.info("Intento de reconexión %d/%d…", attempt, self.max_reconnect_attempts)
-
-            try:
-                for task in (self._recv_task, self._ping_task):
-                    if task:
-                        task.cancel()
-                        with contextlib.suppress(asyncio.CancelledError):
-                            await task  # Esperar a que la cancelación se complete
-                self._recv_task = None
-                self._ping_task = None
-
-                # Cerrar conexión actual silenciosamente
-                with contextlib.suppress(Exception):
-                    if self._ws is not None:
-                        await self._ws.close()
-                        self._ws = None  # Resetear para que connect() parta de cero
-
-                for fut in self._pending.values():
-                    if not fut.done():
-                        fut.set_exception(DerivConnectionError("Reconectando..."))
-                self._pending.clear()
-                
-                await self.connect()  # Pide OTP NUEVO
-
-                logger.info("WebSocket reconectado exitosamente")
-                return True
-            
-            except (DerivConnectionError, DerivAuthError, Exception) as exc:
-                logger.warning("Fallo en intento de reconexión: %s", exc)
-
-        logger.error("No se pudo reconectar tras %d intentos.", self.max_reconnect_attempts)        
-        return False
-
-    async def _resubscribe_all(self) -> None:
-        """Resuscribe todos los streams activos tras una reconexión."""
-        for msg_type, subs in list(self._subscriptions.items()):
-            for payload, handler in subs:
-                try:
-                    logger.debug("Resuscribiendo %s...", msg_type)
-                    await self.request({**payload, "subscribe": 1})
-                except Exception as exc:
-                    logger.error("Error al resuscribir %s: %s", msg_type, exc)
-
+    
     async def get_balance(self, subscribe: bool = False) -> Balance:
         """``balance`` — saldo actual (o suscripción a cambios)."""
         if subscribe:
