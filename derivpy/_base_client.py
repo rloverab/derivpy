@@ -43,6 +43,9 @@ class BaseDerivWSClient(ABC):
         self._reconnect_lock = asyncio.Lock()       # 🆕 Evita reconexiones paralelas
         self._connection_event = asyncio.Event()    # 🆕 Señaliza cuando la conexión es estable
 
+    @property 
+    def is_connection_stable(self) -> bool: 
+        return self._connection_event.is_set()
 
     async def connect(self) -> None:
         self._closing = False
