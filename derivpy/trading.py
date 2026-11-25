@@ -150,6 +150,16 @@ class TradingClient(BaseDerivWSClient):
                     asyncio.create_task(result)
             except Exception:
                 logger.exception("Error en handler de stream %s", msg_type)
+
+    async def _resubscribe_all(self) -> None:
+        """Resuscribe todos los streams activos tras una reconexión."""
+        for msg_type, subs in list(self._subscriptions.items()):
+            for payload, handler in subs:
+                try:
+                    logger.debug("[%s] Resuscribiendo %s...", self.__class__.__name__, msg_type)
+                    await self.request({**payload, "subscribe": 1})
+                except Exception as exc:
+                    logger.error("[%s] Error al resuscribir %s: %s", self.__class__.__name__, msg_type, exc)
     
     async def get_balance(self, subscribe: bool = False) -> Balance:
         """``balance`` — saldo actual (o suscripción a cambios)."""

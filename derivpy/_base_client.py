@@ -255,18 +255,32 @@ class BaseDerivWSClient(ABC):
         return False
 
     async def _resubscribe_all(self) -> None:
-        """Resuscribe todos los streams activos tras una reconexión."""
-        for token, payload in list(self._active_subscriptions.items()):
+        """Resuscribe todos los streams activos tras una reconexión.
+        
+        Implementación por defecto para MarketDataClient.
+        TradingClient sobrescribe este método con su propia lógica.
+        """
+        subscriptions = getattr(self, '_active_subscriptions', {})
+        for token, payload in list(subscriptions.items()):
             try:
-                msg_type = next(iter(payload))
-                logger.debug("Resuscribiendo %s...", msg_type)
+                logger.debug("[%s] Resuscribiendo stream %s...", self.__class__.__name__, token)
                 await self.request({**payload, "subscribe": 1})
             except Exception as exc:
-                logger.error("Error al resuscribir %s: %s", payload, exc)
-                # Si falla la resuscripción, notificar a la cola
-                if token in self._streams:
-                    _, q = self._streams[token]
-                    q.put_nowait(None)
+                logger.error("[%s] Error al resuscribir %s: %s", self.__class__.__name__, token, exc)
+
+    # async def _resubscribe_all(self) -> None:
+    #     """Resuscribe todos los streams activos tras una reconexión."""
+    #     for token, payload in list(self._active_subscriptions.items()):
+    #         try:
+    #             msg_type = next(iter(payload))
+    #             logger.debug("Resuscribiendo %s...", msg_type)
+    #             await self.request({**payload, "subscribe": 1})
+    #         except Exception as exc:
+    #             logger.error("Error al resuscribir %s: %s", payload, exc)
+    #             # Si falla la resuscripción, notificar a la cola
+    #             if token in self._streams:
+    #                 _, q = self._streams[token]
+    #                 q.put_nowait(None)
 
     async def _handle_disconnect(self) -> None:
         # Limpieza de colas al caer la conexión
