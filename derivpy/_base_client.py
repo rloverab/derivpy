@@ -276,6 +276,9 @@ class BaseDerivWSClient(ABC):
                     "⚠️ [%s] Conexión cerrada durante el envío de ping. Saliendo del bucle.", 
                     self.__class__.__name__
                 )
+                if not self._closing:
+                    # Disparar la reconexión de forma segura si el _recv_loop no lo hizo
+                    await self._handle_disconnect()
                 break
             except Exception as exc:
                 logger.error(
