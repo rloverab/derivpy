@@ -5,13 +5,12 @@ import asyncio
 import logging
 import contextlib
 import json
-import random
 import websockets
 
 from websockets import State
 from collections.abc import AsyncIterator
 from abc import ABC
-from typing import Any, Awaitable, Callable
+from typing import Any
 
 from . import _constants as C
 from .exceptions import DerivAPIError, DerivConnectionError
@@ -120,21 +119,6 @@ class BaseDerivWSClient(ABC):
                 client_name, event.name, exc, exc_info=True
             )
             return event != ReconnectionEvent.FATAL_FAILURE
-
-    def set_fatal_failure_callback(
-        self, 
-        callback: Callable[[str, int], Awaitable[bool]]
-    ) -> None:
-        """Callback que decide si continuar reintentando.
-        
-        Args:
-            client_name: Nombre de la clase que falló
-            consecutive_failures: Número de fallos consecutivos
-        
-        Returns:
-            True si se debe seguir reintentando, False para parar
-        """
-        self._on_fatal_failure = callback
 
     async def connect(self) -> None:
         self._closing = False
@@ -339,25 +323,12 @@ class BaseDerivWSClient(ABC):
         Implementación por defecto para MarketDataClient.
         TradingClient sobrescribe este método con su propia lógica.
         """
-        subscriptions = getattr(self, '_active_subscriptions', {})
-        for token, payload in list(subscriptions.items()):
+        for token, payload in list(self._active_subscriptions.items()):
             try:
                 logger.debug("[%s] Resuscribiendo stream %s...", self.__class__.__name__, token)
                 await self.request({**payload, "subscribe": 1})
             except Exception as exc:
                 logger.error("[%s] Error al resuscribir %s: %s", self.__class__.__name__, token, exc)
-
-    def _calculate_backoff_delay(self) -> float:
-        """Backoff exponencial con techo y jitter opcional."""
-        cfg = self._reconnection_config
-        delay = min(
-            cfg.base_delay * (cfg.backoff_multiplier ** (self._consecutive_failures - 1)),
-            cfg.max_delay
-        )
-        if cfg.jitter:
-            # Jitter uniforme: +/- 25% para evitar sincronización
-            delay *= random.uniform(0.75, 1.25)
-        return delay
 
     async def _should_continue_retrying(self) -> bool:
         """Evalúa si debe seguir reintentando según la estrategia configurada."""
