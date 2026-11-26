@@ -5,18 +5,25 @@ import asyncio
 import logging
 import contextlib
 import json
+import random
 import websockets
 
 from websockets import State
 from collections.abc import AsyncIterator
 from abc import ABC
-from typing import Any
-    
+from typing import Any, Awaitable, Callable
 
 from . import _constants as C
 from .exceptions import DerivAPIError, DerivConnectionError
+from .reconnection import (
+    ReconnectionConfig, 
+    ReconnectionEvent,
+    ReconnectionMode,
+    EventCallback
+)
 
 logger = logging.getLogger("derivpy.base")
+
 
 class BaseDerivWSClient(ABC):
     """Clase base para gestionar la fontanería de WebSocket de Deriv."""
@@ -27,6 +34,7 @@ class BaseDerivWSClient(ABC):
         *,
         request_timeout: float = 10.0,
         ping_interval: float = 30.0,
+        reconnection_config: ReconnectionConfig | None = None,
     ) -> None:
         self._url = url
         self.request_timeout = request_timeout
@@ -39,13 +47,94 @@ class BaseDerivWSClient(ABC):
         self._req_id_floor: int | None = None
         self._pending: dict[int, asyncio.Future[dict[str, Any]]] = {}
         self._streams: dict[int, tuple[set[str], asyncio.Queue]] = {}
+        self._active_subscriptions: dict[int, dict[str, Any]] = {}
         self._closing = False
-        self._reconnect_lock = asyncio.Lock()       # 🆕 Evita reconexiones paralelas
-        self._connection_event = asyncio.Event()    # 🆕 Señaliza cuando la conexión es estable
+        
+        # 🆕 Sistema de reconexión robusto
+        self._reconnection_config = reconnection_config or ReconnectionConfig()
+        self._reconnect_lock = asyncio.Lock()
+        self._connection_event = asyncio.Event()
+        self._consecutive_failures = 0
+        self._event_callback: EventCallback | None = None
+        self._event_callback_timeout: float = (
+            self._reconnection_config.event_callback_timeout
+        )
 
     @property 
     def is_connection_stable(self) -> bool: 
         return self._connection_event.is_set()
+
+    def set_event_callback(
+        self, 
+        callback: EventCallback,
+        timeout: float | None = None
+    ) -> None:
+        """Registra un callback robusto con timeout y manejo de errores.
+        
+        Args:
+            callback: Función async que recibe (client_name, event, failure_count)
+                     Retorna True para continuar reintentando, False para parar.
+            timeout: Segundos máximos de espera. Si None, usa el de la config.
+        """
+        self._event_callback = callback
+        if timeout is not None:
+            self._event_callback_timeout = timeout
+
+    async def _invoke_event_callback(
+        self, 
+        event: ReconnectionEvent,
+        failure_count: int
+    ) -> bool:
+        """Invoca el callback de forma segura con timeout y manejo de errores.
+        
+        Returns:
+            True si se debe continuar reintentando, False para parar.
+            En caso de error o timeout, retorna el fallback seguro.
+        """
+        if not self._event_callback:
+            # Sin callback: comportamiento por defecto según el evento
+            return event != ReconnectionEvent.FATAL_FAILURE
+        
+        client_name = self.__class__.__name__
+        
+        try:
+            # Protección con timeout para evitar bloqueos indefinidos
+            result = await asyncio.wait_for(
+                asyncio.shield(self._event_callback(client_name, event, failure_count)),
+                timeout=self._event_callback_timeout
+            )
+            return bool(result)
+            
+        except asyncio.TimeoutError:
+            logger.error(
+                "[%s] ⏱️ Callback timeout tras %.1fs para evento %s. "
+                "Asumiendo comportamiento por defecto.",
+                client_name, self._event_callback_timeout, event.name
+            )
+            return event != ReconnectionEvent.FATAL_FAILURE
+            
+        except Exception as exc:
+            logger.error(
+                "[%s] ❌ Excepción en callback para evento %s: %s. "
+                "Continuando con comportamiento por defecto.",
+                client_name, event.name, exc, exc_info=True
+            )
+            return event != ReconnectionEvent.FATAL_FAILURE
+
+    def set_fatal_failure_callback(
+        self, 
+        callback: Callable[[str, int], Awaitable[bool]]
+    ) -> None:
+        """Callback que decide si continuar reintentando.
+        
+        Args:
+            client_name: Nombre de la clase que falló
+            consecutive_failures: Número de fallos consecutivos
+        
+        Returns:
+            True si se debe seguir reintentando, False para parar
+        """
+        self._on_fatal_failure = callback
 
     async def connect(self) -> None:
         self._closing = False
@@ -70,7 +159,7 @@ class BaseDerivWSClient(ABC):
         self._connection_event.set()    # 🆕 Marcar como estable
 
     async def disconnect(self) -> None:
-        self._connection_event.clear()  # 🆕
+        self._connection_event.clear()
         self._closing = True
         
         if self._ping_task:
@@ -212,47 +301,37 @@ class BaseDerivWSClient(ABC):
                 break
 
     async def _reconnect(self) -> bool:
-        """Reintenta conectar con backoff exponencial."""
-        delay = 1.0
-        for attempt in range(1, self.max_reconnect_attempts + 1):
-            await asyncio.sleep(delay)
-            delay = min(delay * 2, 30.0)
-            logger.info("Intento de reconexión %d/%d…", attempt, self.max_reconnect_attempts)
+        """Reintenta conectar con limpieza completa de estado."""
+        try:
+            # Cancelar tareas existentes
+            for task in (self._recv_task, self._ping_task):
+                if task and not task.done():
+                    task.cancel()
+                    with contextlib.suppress(asyncio.CancelledError):
+                        await task
             
-            try:
-                if self._recv_task:
-                    self._recv_task.cancel()
-                    with contextlib.suppress(asyncio.CancelledError):
-                        await self._recv_task
-                self._recv_task = None
+            self._recv_task = None
+            self._ping_task = None
 
-                if self._ping_task:
-                    self._ping_task.cancel()
-                    with contextlib.suppress(asyncio.CancelledError):
-                        await self._ping_task
-                self._ping_task = None
+            # Cerrar socket huérfano
+            with contextlib.suppress(Exception):
+                if self._ws is not None:
+                    await self._ws.close()
+                    self._ws = None
 
-                # Limpieza quirúrgica del socket huérfano
-                with contextlib.suppress(Exception):
-                    if self._ws is not None:
-                        await self._ws.close()
-                        self._ws = None
-
-                for fut in self._pending.values():
-                    if not fut.done():
-                        fut.set_exception(DerivConnectionError("Reconectando..."))
-                self._pending.clear()
-                
-                # Reutilizar el método oficial de conexión
-                await self.connect()
-                logger.info("WebSocket reconectado exitosamente")
-                return True
-                
-            except (DerivConnectionError, Exception) as exc:
-                logger.warning("Fallo en intento de reconexión: %s", exc)
-        
-        logger.error("No se pudo reconectar tras %d intentos.", self.max_reconnect_attempts)
-        return False
+            # Limpiar pendientes
+            for fut in self._pending.values():
+                if not fut.done():
+                    fut.set_exception(DerivConnectionError("Reconectando..."))
+            self._pending.clear()
+            
+            # Conectar de nuevo (usa el método sobrescrito de la clase hija)
+            await self.connect()
+            return True
+            
+        except Exception as exc:
+            logger.warning("Fallo en intento de reconexión: %s", exc)
+            return False
 
     async def _resubscribe_all(self) -> None:
         """Resuscribe todos los streams activos tras una reconexión.
@@ -268,49 +347,113 @@ class BaseDerivWSClient(ABC):
             except Exception as exc:
                 logger.error("[%s] Error al resuscribir %s: %s", self.__class__.__name__, token, exc)
 
-    # async def _resubscribe_all(self) -> None:
-    #     """Resuscribe todos los streams activos tras una reconexión."""
-    #     for token, payload in list(self._active_subscriptions.items()):
-    #         try:
-    #             msg_type = next(iter(payload))
-    #             logger.debug("Resuscribiendo %s...", msg_type)
-    #             await self.request({**payload, "subscribe": 1})
-    #         except Exception as exc:
-    #             logger.error("Error al resuscribir %s: %s", payload, exc)
-    #             # Si falla la resuscripción, notificar a la cola
-    #             if token in self._streams:
-    #                 _, q = self._streams[token]
-    #                 q.put_nowait(None)
+    def _calculate_backoff_delay(self) -> float:
+        """Backoff exponencial con techo y jitter opcional."""
+        cfg = self._reconnection_config
+        delay = min(
+            cfg.base_delay * (cfg.backoff_multiplier ** (self._consecutive_failures - 1)),
+            cfg.max_delay
+        )
+        if cfg.jitter:
+            # Jitter uniforme: +/- 25% para evitar sincronización
+            delay *= random.uniform(0.75, 1.25)
+        return delay
 
+    async def _should_continue_retrying(self) -> bool:
+        """Evalúa si debe seguir reintentando según la estrategia configurada."""
+        cfg = self._reconnection_config
+        
+        if cfg.mode == ReconnectionMode.STOP_ON_FATAL:
+            return False
+        
+        if cfg.mode == ReconnectionMode.LIMITED_RETRY:
+            return self._consecutive_failures < cfg.max_attempts
+        
+        if cfg.mode == ReconnectionMode.INFINITE_RETRY:
+            return await self._invoke_event_callback(
+                ReconnectionEvent.FATAL_FAILURE,
+                self._consecutive_failures
+            )
+        
+        return False
+        
     async def _handle_disconnect(self) -> None:
-        # Limpieza de colas al caer la conexión
         if self._closing:
-            # Desconexión intencional: cerrar todas las colas
             for _, (_, q) in self._streams.items():
                 q.put_nowait(None)
             return
 
-        # 🆕 Usar Lock para garantizar que solo una tarea maneje la reconexión
         async with self._reconnect_lock:
-            # Doble check: si mientras esperábamos el lock otra tarea ya nos reconectó, salir.
             if self.is_connected:
                 return
 
-            
             self._connection_event.clear()
-            # Desconexión inesperada: intentar reconexión
-            logger.warning("[%s] Conexión caída; iniciando reconexión segura...", self.__class__.__name__)
-        
-            if await self._reconnect():
-                logger.info("[%s] Reconexión exitosa. Resuscribiendo streams...", self.__class__.__name__)
-                await self._resubscribe_all()
-                self._connection_event.set()    # 🆕 Motor puede reanudar operaciones
-            else:
-                logger.error("[%s] Reconexión fallida tras múltiples intentos.", self.__class__.__name__)
-                for _, (_, q) in self._streams.items():
-                    q.put_nowait(None)
-                self._closing = True
-                await self.disconnect()
+            logger.warning(
+                "[%s] Conexión caída. Modo: %s | Fallos consecutivos: %d", 
+                self.__class__.__name__, 
+                self._reconnection_config.mode.name,
+                self._consecutive_failures
+            )
+            
+            while not self._closing:
+                self._consecutive_failures += 1
+                delay = self._reconnection_config.calculate_backoff_delay(
+                    self._consecutive_failures
+                )
+                
+                logger.info(
+                    "[%s] Intento de reconexión (fallo #%d) en %.1fs...", 
+                    self.__class__.__name__, 
+                    self._consecutive_failures, 
+                    delay
+                )
+                await asyncio.sleep(delay)
+                
+                if await self._reconnect():
+                    needs_history_reload = (
+                        self._consecutive_failures >= 
+                        self._reconnection_config.force_history_reload_after
+                    )
+                    self._consecutive_failures = 0
+                    self._connection_event.set()
+                    
+                    # Determinar evento a emitir
+                    event = (
+                        ReconnectionEvent.REQUIRES_HISTORY_RELOAD 
+                        if needs_history_reload 
+                        else ReconnectionEvent.HEALTH_CHECK_PASSED
+                    )
+                    
+                    logger.info(
+                        "[%s] ✅ Reconexión exitosa. Evento: %s",
+                        self.__class__.__name__, event.name
+                    )
+                    await self._resubscribe_all()
+                    
+                    # Invocar callback de forma segura
+                    await self._invoke_event_callback(event, 0)
+                    return
+                
+                # Evaluar si continuar reintentando
+                should_continue = await self._should_continue_retrying()
+                if not should_continue:
+                    logger.critical(
+                        "[%s] 💀 Deteniendo tras %d intentos.", 
+                        self.__class__.__name__, 
+                        self._consecutive_failures
+                    )
+                    
+                    # Notificar fallo fatal antes de cerrar
+                    await self._invoke_event_callback(
+                        ReconnectionEvent.FATAL_FAILURE, 
+                        self._consecutive_failures
+                    )
+                    
+                    for _, (_, q) in self._streams.items():
+                        q.put_nowait(None)
+                    self._closing = True
+                    await self.disconnect()
+                    return
 
     async def _process_stream_message(self, msg: dict[str, Any]) -> None:
         """Enrutador genérico: envía el mensaje a las colas registradas."""
