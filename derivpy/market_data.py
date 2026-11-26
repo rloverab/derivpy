@@ -18,13 +18,12 @@ Ejemplo::
 from __future__ import annotations
 
 import logging
-from collections.abc import AsyncIterator
-from typing import Any, Literal
+
+from derivpy.reconnection import ReconnectionConfig
 from ._base_client import BaseDerivWSClient
 
 
 from . import _constants as C
-from .models import Candle, Symbol, Tick
 
 logger = logging.getLogger("derivpy.marketdata")
 
@@ -36,7 +35,7 @@ class MarketDataClient(BaseDerivWSClient):
         url: gateway alternativo si el público cambiara en el futuro.
         request_timeout: segundos máximos de espera por una respuesta puntual.
         ping_interval: segundos entre pings de keep-alive.
-        max_reconnect_attempts: intentos de reconexión antes de fallar.
+        reconnection_config: Configuración de estrategia de reconexión.
     """
 
     def __init__(
@@ -45,12 +44,13 @@ class MarketDataClient(BaseDerivWSClient):
         *,
         request_timeout: float = C.DEFAULT_REQUEST_TIMEOUT,
         ping_interval: float = C.DEFAULT_PING_INTERVAL,
-        max_reconnect_attempts: int = 3
+        reconnection_config: ReconnectionConfig | None = None,
     ) -> None:
-        super().__init__(url, request_timeout=request_timeout, ping_interval=ping_interval)
-        self.max_reconnect_attempts = max_reconnect_attempts
-        # Guardar payloads para resuscripción
-        self._active_subscriptions: dict[int, dict[str, Any]] = {}
+        super().__init__(
+            url,
+            request_timeout=request_timeout,
+            ping_interval=ping_interval,
+            reconnection_config=reconnection_config
         
 
     # ------------------------------------------------------------------ #

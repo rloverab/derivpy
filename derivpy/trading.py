@@ -12,7 +12,8 @@ Flujo (https://developers.deriv.com/llms/getting-started.md):
 
 El cliente gestiona en segundo plano: keep-alive (``ping`` cada ~30 s),
 correlación petición/respuesta vía ``req_id``, despacho de streams a callbacks
-y reconexión automática pidiendo una URL OTP nueva.
+y reconexión automática con backoff exponencial pidiendo una URL OTP nueva.
+La estrategia de reconexión es configurable vía ``ReconnectionConfig``.
 """
 
 from __future__ import annotations
@@ -22,6 +23,8 @@ import contextlib
 import logging
 from collections.abc import AsyncIterator, Awaitable, Callable
 from typing import Any, Literal
+
+from derivpy.reconnection import ReconnectionConfig
 
 from . import _constants as C
 from ._base_client import BaseDerivWSClient
@@ -44,7 +47,7 @@ class TradingClient(BaseDerivWSClient):
         app_id: App ID; obligatorio si ``token`` es un PAT.
         request_timeout: segundos de espera máxima por respuesta a una petición.
         ping_interval: segundos entre pings de keep-alive (0 lo desactiva).
-        max_reconnect_attempts: intentos de reconexión antes de fallar.
+        reconnection_config: Configuración de estrategia de reconexión.
 
     Ejemplo::
 
@@ -64,13 +67,16 @@ class TradingClient(BaseDerivWSClient):
         *,
         request_timeout: float = C.DEFAULT_REQUEST_TIMEOUT,
         ping_interval: float = C.DEFAULT_PING_INTERVAL,
-        max_reconnect_attempts: int = C.DEFAULT_MAX_RECONNECT_ATTEMPTS,
+        reconnection_config: ReconnectionConfig | None = None,
     ) -> None:
-        super().__init__("", request_timeout=request_timeout, ping_interval=ping_interval)
+        super().__init__(
+            "",
+            request_timeout=request_timeout,
+            ping_interval=ping_interval,
+            reconnection_config=reconnection_config
+        )
         self.account_id = str(account_id)
         self._rest = RestClient(token=token, app_id=app_id)
-        self.max_reconnect_attempts = max_reconnect_attempts
-        self._callbacks: dict[str, list[StreamHandler]] = {}
         self._subscriptions: dict[str, list[tuple[dict[str, Any], StreamHandler]]] = {}
         self._connected = asyncio.Event()
 
@@ -92,8 +98,8 @@ class TradingClient(BaseDerivWSClient):
 
     @property
     def is_connected(self) -> bool:
-        """True si la conexión WebSocket está activa."""
-        return super().is_connected and self._connected.is_set()
+        """True si la conexión WebSocket está activa y estable."""
+        return self.is_connection_stable and self._connected.is_set()
 
     # ------------------------------------------------------------------ #
     # Envío / recepción
@@ -116,17 +122,14 @@ class TradingClient(BaseDerivWSClient):
             self.remove_handler(msg_type, handler)
             raise
 
-    def remove_handler(self, msg_type: str, handler: StreamHandler | None = None) -> None:
-        """Quita un callback (o todos) para un ``msg_type`` dado."""
-        if handler is None:
-            self._streams.pop(msg_type, None)
-        else:
-            subs = self._subscriptions.get(msg_type, [])
-            self._subscriptions[msg_type] = [
-                (payload, h) for payload, h in subs if h != handler
-            ]
-            if not self._subscriptions[msg_type]:
-                self._subscriptions.pop(msg_type, None)
+    def remove_handler(self, msg_type: str, handler: StreamHandler) -> None:
+        """Quita un callback específico para un ``msg_type`` dado."""
+        subs = self._subscriptions.get(msg_type, [])
+        self._subscriptions[msg_type] = [
+            (payload, h) for payload, h in subs if h != handler
+        ]
+        if not self._subscriptions[msg_type]:
+            self._subscriptions.pop(msg_type, None)
 
     async def forget(self, subscription_id: str) -> dict[str, Any]:
         """``forget`` — cancela una suscripción concreta por su id."""
