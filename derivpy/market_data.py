@@ -18,7 +18,9 @@ Ejemplo::
 from __future__ import annotations
 
 import logging
+from typing import AsyncIterator, Literal
 
+from derivpy.models import Candle, Symbol, Tick
 from derivpy.reconnection import ReconnectionConfig
 from ._base_client import BaseDerivWSClient
 
@@ -51,6 +53,7 @@ class MarketDataClient(BaseDerivWSClient):
             request_timeout=request_timeout,
             ping_interval=ping_interval,
             reconnection_config=reconnection_config
+        )
         
 
     # ------------------------------------------------------------------ #

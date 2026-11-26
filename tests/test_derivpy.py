@@ -16,7 +16,7 @@ import unittest
 
 import websockets
 
-from derivpy.exceptions import DerivAPIError, DerivAuthError
+from derivpy.exceptions import DerivAPIError
 from derivpy.market_data import MarketDataClient
 from derivpy.models import OpenContract, Tick
 from derivpy.trading import TradingClient
