@@ -96,6 +96,36 @@ class TradingClient(BaseDerivWSClient):
         self._connected.clear()
         await super().disconnect()
 
+    async def _reconnect(self) -> bool:
+        """Reconecta el TradingClient con logging detallado."""
+        try:
+            logger.info(f"[TradingClient] Intentando reconexión (cuenta {self.account_id})...")
+            
+            # Limpiar estado anterior
+            self._connected.clear()
+            if self._ws:
+                with contextlib.suppress(Exception):
+                    await self._ws.close()
+                self._ws = None
+            
+            # Pedir nuevo OTP
+            logger.debug("[TradingClient] Solicitando nuevo OTP...")
+            url = await self._rest.get_otp_ws_url(self.account_id)
+            self._url = url
+            logger.debug(f"[TradingClient] OTP obtenido: {url[:50]}...")
+            
+            # Conectar WebSocket
+            logger.debug("[TradingClient] Conectando WebSocket...")
+            await super().connect()
+            
+            self._connected.set()
+            logger.info(f"[TradingClient] ✅ Reconexión exitosa (cuenta {self.account_id})")
+            return True
+            
+        except Exception as exc:
+            logger.error(f"[TradingClient] ❌ Error en reconexión: {exc}", exc_info=True)
+            return False
+
     @property
     def is_connected(self) -> bool:
         """True si la conexión WebSocket está activa y estable."""
